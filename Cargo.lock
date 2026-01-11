@@ -16040,6 +16040,7 @@ dependencies = [
  "picker",
  "serde",
  "settings",
+ "smol",
  "theme",
  "ui",
  "util",
