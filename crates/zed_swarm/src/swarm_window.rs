@@ -6,6 +6,7 @@ use gpui::{
     InteractiveElement, ParentElement, Styled,
 };
 use swarm_chat::{ChatPanel, ChatSidebar, ChatSidebarEvent};
+use swarm_file_picker::{FilePicker, FilePickerEvent};
 use ui::prelude::*;
 
 #[derive(Clone, Debug, Default)]
@@ -20,6 +21,8 @@ pub struct SwarmWindow {
     focus_handle: FocusHandle,
     repo_path: Option<PathBuf>,
     git_status: GitStatus,
+    file_picker: Option<Entity<FilePicker>>,
+    show_file_picker: bool,
 }
 
 impl SwarmWindow {
@@ -55,7 +58,24 @@ impl SwarmWindow {
             focus_handle,
             repo_path,
             git_status,
+            file_picker: None,
+            show_file_picker: false,
         }
+    }
+
+    fn open_file_picker(&mut self, cx: &mut Context<Self>) {
+        if self.repo_path.is_some() {
+            self.show_file_picker = true;
+            cx.notify();
+        } else {
+            log::warn!("File picker requested without a repository path");
+        }
+    }
+
+    fn dismiss_file_picker(&mut self, cx: &mut Context<Self>) {
+        self.show_file_picker = false;
+        self.file_picker = None;
+        cx.notify();
     }
 
     fn handle_sidebar_event(
@@ -112,7 +132,20 @@ impl SwarmWindow {
                 self.save_current_conversation(cx);
             }
             swarm_chat::ChatPanelEvent::FilePickerRequested => {
-                // Handle file picker if needed
+                self.open_file_picker(cx);
+            }
+        }
+    }
+
+    fn handle_file_picker_event(
+        &mut self,
+        _picker: Entity<FilePicker>,
+        event: &FilePickerEvent,
+        cx: &mut Context<Self>,
+    ) {
+        match event {
+            FilePickerEvent::Selected(_) | FilePickerEvent::Dismissed => {
+                self.dismiss_file_picker(cx);
             }
         }
     }
@@ -179,10 +212,37 @@ impl Focusable for SwarmWindow {
 }
 
 impl Render for SwarmWindow {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        if self.show_file_picker && self.file_picker.is_none() {
+            if let Some(repo_path) = self.repo_path.clone() {
+                let picker = cx.new(|cx| FilePicker::new(repo_path, window, cx));
+                cx.subscribe(&picker, Self::handle_file_picker_event).detach();
+                self.file_picker = Some(picker);
+            }
+        }
+
         let theme = cx.theme();
         let repo_name = self.repo_name();
         let git_status = self.git_status.clone();
+        let overlay = self
+            .file_picker
+            .clone()
+            .filter(|_| self.show_file_picker)
+            .map(|picker| {
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(theme.colors().background.opacity(0.6))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .w(px(720.))
+                            .h(px(520.))
+                            .child(picker),
+                    )
+            });
 
         div()
             .key_context("SwarmWindow")
@@ -190,6 +250,7 @@ impl Render for SwarmWindow {
             .size_full()
             .flex()
             .flex_col()
+            .relative()
             .bg(theme.colors().background)
             .text_color(theme.colors().text)
             .font_family(".SystemFont")
@@ -256,5 +317,6 @@ impl Render for SwarmWindow {
                             .child(self.chat_panel.clone())
                     )
             )
+            .when_some(overlay, |this, overlay| this.child(overlay))
     }
 }

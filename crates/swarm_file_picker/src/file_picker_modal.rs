@@ -5,10 +5,11 @@ use anyhow::Result;
 use collections::HashMap;
 use fuzzy::{StringMatch, StringMatchCandidate};
 use gpui::{
-    div, App, Context, Entity, EventEmitter, FocusHandle, Focusable,
+    div, App, Context, DismissEvent, Entity, EventEmitter, FocusHandle, Focusable,
     IntoElement, ParentElement, Render, Styled, Task, Window,
 };
 use picker::{Picker, PickerDelegate};
+use smol::unblock;
 use ui::{ListItem, ListItemSpacing, prelude::*};
 
 pub enum FilePickerEvent {
@@ -27,9 +28,21 @@ impl FilePicker {
         cx: &mut Context<Self>,
     ) -> Self {
         let delegate = FilePickerDelegate::new(root_path);
-        let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx));
+        let picker = cx.new(|cx| Picker::uniform_list(delegate, window, cx).modal(false));
+        cx.subscribe(&picker, Self::handle_picker_dismissed).detach();
 
         Self { picker }
+    }
+}
+
+impl FilePicker {
+    fn handle_picker_dismissed(
+        &mut self,
+        _picker: Entity<Picker<FilePickerDelegate>>,
+        _event: &DismissEvent,
+        cx: &mut Context<Self>,
+    ) {
+        cx.emit(FilePickerEvent::Dismissed);
     }
 }
 
@@ -62,6 +75,7 @@ pub struct FilePickerDelegate {
     matches: Vec<StringMatch>,
     selected_index: usize,
     selected_files: HashMap<PathBuf, bool>,
+    loading_files: bool,
 }
 
 impl FilePickerDelegate {
@@ -72,20 +86,15 @@ impl FilePickerDelegate {
             matches: Vec::new(),
             selected_index: 0,
             selected_files: HashMap::default(),
+            loading_files: false,
         }
     }
 
-    fn load_files(&mut self, _cx: &App) -> Result<()> {
-        self.files.clear();
-
-        if self.root_path.exists() && self.root_path.is_dir() {
-            self.walk_directory(&self.root_path.clone())?;
-        }
-
-        Ok(())
-    }
-
-    fn walk_directory(&mut self, dir: &PathBuf) -> Result<()> {
+    fn walk_directory(
+        root_path: &PathBuf,
+        dir: &PathBuf,
+        files: &mut Vec<PathBuf>,
+    ) -> Result<()> {
         let entries = std::fs::read_dir(dir)?;
 
         for entry in entries.flatten() {
@@ -93,24 +102,32 @@ impl FilePickerDelegate {
             let file_name = path.file_name().map(|n| n.to_string_lossy().to_string());
 
             if let Some(name) = &file_name {
-                if name.starts_with('.') || self.should_skip_directory(name) {
+                if name.starts_with('.') || Self::should_skip_directory(name) {
                     continue;
                 }
             }
 
             if path.is_file() {
-                if let Ok(relative) = path.strip_prefix(&self.root_path) {
-                    self.files.push(relative.to_path_buf());
+                if let Ok(relative) = path.strip_prefix(root_path) {
+                    files.push(relative.to_path_buf());
                 }
             } else if path.is_dir() {
-                self.walk_directory(&path)?;
+                Self::walk_directory(root_path, &path, files)?;
             }
         }
 
         Ok(())
     }
 
-    fn should_skip_directory(&self, name: &str) -> bool {
+    fn collect_files(root_path: &PathBuf) -> Result<Vec<PathBuf>> {
+        let mut files = Vec::new();
+        if root_path.exists() && root_path.is_dir() {
+            Self::walk_directory(root_path, root_path, &mut files)?;
+        }
+        Ok(files)
+    }
+
+    fn should_skip_directory(name: &str) -> bool {
         matches!(
             name,
             "node_modules"
@@ -170,7 +187,67 @@ impl PickerDelegate for FilePickerDelegate {
         cx: &mut Context<Picker<Self>>,
     ) -> Task<()> {
         if self.files.is_empty() {
-            let _ = self.load_files(cx);
+            if self.loading_files {
+                return Task::ready(());
+            }
+
+            self.loading_files = true;
+            let root_path = self.root_path.clone();
+            let query = query.clone();
+
+            return cx.spawn_in(window, async move |picker, cx| {
+                let files = unblock(move || FilePickerDelegate::collect_files(&root_path)).await;
+
+                let (files, matches) = match files {
+                    Ok(files) => {
+                        let candidates: Vec<StringMatchCandidate> = files
+                            .iter()
+                            .enumerate()
+                            .map(|(id, path)| StringMatchCandidate {
+                                id,
+                                string: path.to_string_lossy().to_string(),
+                                char_bag: path.to_string_lossy().chars().collect(),
+                            })
+                            .collect();
+
+                        let matches = if query.is_empty() {
+                            candidates
+                                .iter()
+                                .map(|c| StringMatch {
+                                    candidate_id: c.id,
+                                    string: c.string.clone(),
+                                    positions: Vec::new(),
+                                    score: 0.0,
+                                })
+                                .collect()
+                        } else {
+                            fuzzy::match_strings(
+                                &candidates,
+                                &query,
+                                false,
+                                true,
+                                100,
+                                &Default::default(),
+                                cx.background_executor().clone(),
+                            )
+                            .await
+                        };
+
+                        (files, matches)
+                    }
+                    Err(_) => (Vec::new(), Vec::new()),
+                };
+
+                picker
+                    .update_in(cx, |picker, _window, cx| {
+                        picker.delegate.loading_files = false;
+                        picker.delegate.files = files;
+                        picker.delegate.matches = matches;
+                        picker.delegate.selected_index = 0;
+                        cx.notify();
+                    })
+                    .ok();
+            });
         }
 
         let candidates: Vec<StringMatchCandidate> = self
