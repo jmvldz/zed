@@ -167,6 +167,9 @@ members = [
     "crates/story",
     "crates/storybook",
     "crates/streaming_diff",
+    "crates/swarm_chat",
+    "crates/swarm_file_picker",
+    "crates/swarm_store",
     "crates/sum_tree",
     "crates/supermaven",
     "crates/supermaven_api",
@@ -214,6 +217,7 @@ members = [
     "crates/zlog_settings",
     "crates/ztracing",
     "crates/ztracing_macro",
+    "crates/zed_swarm",
 
     #
     # Extensions
@@ -401,6 +405,9 @@ sqlez = { path = "crates/sqlez" }
 sqlez_macros = { path = "crates/sqlez_macros" }
 story = { path = "crates/story" }
 streaming_diff = { path = "crates/streaming_diff" }
+swarm_chat = { path = "crates/swarm_chat" }
+swarm_file_picker = { path = "crates/swarm_file_picker" }
+swarm_store = { path = "crates/swarm_store" }
 sum_tree = { path = "crates/sum_tree" }
 supermaven = { path = "crates/supermaven" }
 supermaven_api = { path = "crates/supermaven_api" }
@@ -446,6 +453,7 @@ zlog = { path = "crates/zlog" }
 zlog_settings = { path = "crates/zlog_settings" }
 ztracing = { path = "crates/ztracing" }
 ztracing_macro = { path = "crates/ztracing_macro" }
+zed_swarm = { path = "crates/zed_swarm" }
 
 #
 # External crates
