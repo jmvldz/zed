@@ -159,6 +159,36 @@ impl Render for AgentChatView {
                     content.go_back(window, cx);
                 });
             }))
+            .on_action(cx.listener(|this, action: &crate::NewExternalAgentThread, window, cx| {
+                this.content.update(cx, |content, cx| {
+                    content.external_thread(
+                        action.agent.clone(),
+                        None,
+                        None,
+                        window,
+                        cx,
+                    );
+                });
+            }))
+            .on_action(cx.listener(|this, action: &crate::NewNativeAgentThreadFromSummary, window, cx| {
+                let from_session_id = action.from_session_id.clone();
+                this.content.update(cx, |content, cx| {
+                    let thread = content
+                        .thread_store
+                        .read(cx)
+                        .thread_from_session_id(&from_session_id);
+
+                    if let Some(thread) = thread {
+                        content.external_thread(
+                            Some(crate::ExternalAgent::NativeAgent),
+                            None,
+                            Some(thread.clone()),
+                            window,
+                            cx,
+                        );
+                    }
+                });
+            }))
             .child(
                 self.content.update(cx, |content, cx| {
                     content.render_toolbar(window, cx)

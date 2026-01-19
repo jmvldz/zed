@@ -9,8 +9,8 @@ use db::kvp::{Dismissable, KEY_VALUE_STORE};
 use editor::Editor;
 use fs::Fs;
 use gpui::{
-    App, AsyncWindowContext, Entity, EventEmitter, Subscription, Task,
-    WeakEntity, Window, prelude::*,
+    AnimationExt, App, AsyncWindowContext, Entity, EventEmitter, Focusable,
+    Subscription, Task, WeakEntity, Window, prelude::*,
 };
 use language::LanguageRegistry;
 use project::Project;
@@ -141,6 +141,30 @@ pub enum AgentType {
     ClaudeCode,
     Codex,
     Custom { name: SharedString },
+}
+
+impl AgentType {
+    pub fn label(&self) -> SharedString {
+        match self {
+            Self::NativeAgent => "Zed Agent".into(),
+            Self::TextThread => "Text Thread".into(),
+            Self::Gemini => "Gemini CLI".into(),
+            Self::ClaudeCode => "Claude Code".into(),
+            Self::Codex => "Codex CLI".into(),
+            Self::Custom { name } => name.clone(),
+        }
+    }
+
+    pub fn icon(&self) -> Option<ui::IconName> {
+        match self {
+            Self::NativeAgent => Some(ui::IconName::ZedAgent),
+            Self::TextThread => Some(ui::IconName::TextThread),
+            Self::Gemini => Some(ui::IconName::AiGemini),
+            Self::ClaudeCode => Some(ui::IconName::AiClaude),
+            Self::Codex => Some(ui::IconName::AiOpenAi),
+            Self::Custom { .. } => None,
+        }
+    }
 }
 
 pub enum AgentChatContentEvent {
@@ -857,39 +881,615 @@ impl AgentChatContent {
         }
     }
 
-    pub fn render_toolbar(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let title = match &self.active_view {
+    fn render_toolbar_back_button(&self, cx: &Context<Self>) -> impl IntoElement {
+        ui::IconButton::new("go-back", ui::IconName::ArrowLeft)
+            .icon_size(ui::IconSize::Small)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.go_back(window, cx);
+            }))
+            .tooltip(ui::Tooltip::text("Go Back"))
+    }
+
+    fn render_selected_agent_icon(&self, cx: &Context<Self>) -> gpui::AnyElement {
+        let agent_server_store = self.project.read(cx).agent_server_store().clone();
+
+        let (custom_icon, label) = if let AgentType::Custom { name } = &self.selected_agent {
+            let store = agent_server_store.read(cx);
+            let icon = store.agent_icon(&project::ExternalAgentServerName(name.clone()));
+            let label = store
+                .agent_display_name(&project::ExternalAgentServerName(name.clone()))
+                .unwrap_or_else(|| self.selected_agent.label());
+            (icon, label)
+        } else {
+            (None, self.selected_agent.label())
+        };
+
+        let is_loading = self
+            .active_thread_view()
+            .map(|tv| tv.read(cx).is_loading())
+            .unwrap_or(false);
+
+        let has_custom_icon = custom_icon.is_some();
+        let selected_agent = div()
+            .id("selected_agent_icon")
+            .when_some(custom_icon, |this, icon_path| {
+                this.px_1()
+                    .child(ui::Icon::from_external_svg(icon_path).color(Color::Muted))
+            })
+            .when(!has_custom_icon, |this| {
+                this.when_some(self.selected_agent.icon(), |this, icon| {
+                    this.px_1().child(ui::Icon::new(icon).color(Color::Muted))
+                })
+            })
+            .tooltip(move |_, cx| {
+                ui::Tooltip::with_meta(label.clone(), None, "Selected Agent", cx)
+            });
+
+        if is_loading {
+            selected_agent
+                .with_animation(
+                    "pulsating-icon",
+                    gpui::Animation::new(std::time::Duration::from_secs(1))
+                        .repeat()
+                        .with_easing(gpui::pulsating_between(0.2, 0.6)),
+                    |icon, delta| icon.opacity(delta),
+                )
+                .into_any_element()
+        } else {
+            selected_agent.into_any_element()
+        }
+    }
+
+    fn render_title_view(&self, _window: &mut Window, cx: &Context<Self>) -> gpui::AnyElement {
+        const LOADING_SUMMARY_PLACEHOLDER: &str = "Loading Summary…";
+
+        let content = match &self.active_view {
             ActiveView::ExternalAgentThread { thread_view } => {
-                thread_view.read(cx).title(cx)
+                let is_generating_title = thread_view
+                    .read(cx)
+                    .as_native_thread(cx)
+                    .map_or(false, |t| t.read(cx).is_generating_title());
+
+                if let Some(title_editor) = thread_view.read(cx).title_editor() {
+                    let container = div()
+                        .w_full()
+                        .on_action({
+                            let thread_view = thread_view.downgrade();
+                            move |_: &menu::Confirm, window, cx| {
+                                if let Some(thread_view) = thread_view.upgrade() {
+                                    thread_view.focus_handle(cx).focus(window, cx);
+                                }
+                            }
+                        })
+                        .on_action({
+                            let thread_view = thread_view.downgrade();
+                            move |_: &editor::actions::Cancel, window, cx| {
+                                if let Some(thread_view) = thread_view.upgrade() {
+                                    thread_view.focus_handle(cx).focus(window, cx);
+                                }
+                            }
+                        })
+                        .child(title_editor);
+
+                    if is_generating_title {
+                        container
+                            .with_animation(
+                                "generating_title",
+                                gpui::Animation::new(std::time::Duration::from_secs(2))
+                                    .repeat()
+                                    .with_easing(gpui::pulsating_between(0.4, 0.8)),
+                                |div, delta| div.opacity(delta),
+                            )
+                            .into_any_element()
+                    } else {
+                        container.into_any_element()
+                    }
+                } else {
+                    Label::new(thread_view.read(cx).title(cx))
+                        .color(Color::Muted)
+                        .truncate()
+                        .into_any_element()
+                }
             }
-            ActiveView::TextThread { text_thread_editor, .. } => {
-                text_thread_editor.read(cx).title(cx)
+            ActiveView::TextThread {
+                title_editor,
+                text_thread_editor,
+                ..
+            } => {
+                let summary = text_thread_editor.read(cx).text_thread().read(cx).summary();
+
+                match summary {
+                    assistant_text_thread::TextThreadSummary::Pending => Label::new(assistant_text_thread::TextThreadSummary::DEFAULT)
+                        .color(Color::Muted)
+                        .truncate()
+                        .into_any_element(),
+                    assistant_text_thread::TextThreadSummary::Content(summary) => {
+                        if summary.done {
+                            div()
+                                .w_full()
+                                .child(title_editor.clone())
+                                .into_any_element()
+                        } else {
+                            Label::new(LOADING_SUMMARY_PLACEHOLDER)
+                                .truncate()
+                                .color(Color::Muted)
+                                .with_animation(
+                                    "generating_title",
+                                    gpui::Animation::new(std::time::Duration::from_secs(2))
+                                        .repeat()
+                                        .with_easing(gpui::pulsating_between(0.4, 0.8)),
+                                    |label, delta| label.alpha(delta),
+                                )
+                                .into_any_element()
+                        }
+                    }
+                    assistant_text_thread::TextThreadSummary::Error => h_flex()
+                        .w_full()
+                        .child(title_editor.clone())
+                        .child(
+                            ui::IconButton::new("retry-summary-generation", ui::IconName::RotateCcw)
+                                .icon_size(ui::IconSize::Small)
+                                .on_click({
+                                    let text_thread_editor = text_thread_editor.clone();
+                                    move |_, _window, cx| {
+                                        text_thread_editor.update(cx, |text_thread_editor, cx| {
+                                            text_thread_editor.regenerate_summary(cx);
+                                        });
+                                    }
+                                })
+                                .tooltip(move |_window, cx| {
+                                    cx.new(|_| {
+                                        ui::Tooltip::new("Failed to generate title")
+                                            .meta("Click to try again")
+                                    })
+                                    .into()
+                                }),
+                        )
+                        .into_any_element(),
+                }
             }
             ActiveView::History { kind } => {
-                match kind {
+                let title = match kind {
                     HistoryKind::AgentThreads => "History",
                     HistoryKind::TextThreads => "Text Threads",
-                }.into()
+                };
+                Label::new(title).truncate().into_any_element()
             }
-            ActiveView::Configuration => "Settings".into(),
+            ActiveView::Configuration => Label::new("Settings").truncate().into_any_element(),
         };
+
+        h_flex()
+            .key_context("TitleEditor")
+            .id("TitleEditor")
+            .flex_grow()
+            .w_full()
+            .max_w_full()
+            .overflow_x_scroll()
+            .child(content)
+            .into_any()
+    }
+
+    fn render_new_thread_menu(
+        &mut self,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use project::agent_server_store::{CLAUDE_CODE_NAME, CODEX_NAME, GEMINI_NAME};
+
+        let agent_server_store = self.project.read(cx).agent_server_store().clone();
+        let is_via_collab = self.project.read(cx).is_via_collab();
+        let selected_agent = self.selected_agent.clone();
+        let is_agent_selected = move |agent_type: AgentType| selected_agent == agent_type;
+
+        let active_thread = match &self.active_view {
+            ActiveView::ExternalAgentThread { thread_view } => {
+                thread_view.read(cx).as_native_thread(cx)
+            }
+            _ => None,
+        };
+
+        ui::PopoverMenu::new("new_thread_menu")
+            .trigger_with_tooltip(
+                ui::IconButton::new("new_thread_menu_btn", ui::IconName::Plus)
+                    .icon_size(ui::IconSize::Small),
+                ui::Tooltip::text("New Thread…"),
+            )
+            .anchor(gpui::Corner::TopRight)
+            .with_handle(self.new_thread_menu_handle.clone())
+            .menu(move |window, cx| {
+                telemetry::event!("New Thread Clicked");
+
+                let active_thread = active_thread.clone();
+                Some(ContextMenu::build(window, cx, |mut menu, _window, cx| {
+                    menu = menu
+                        .when_some(active_thread, |this, active_thread| {
+                            let thread = active_thread.read(cx);
+
+                            if !thread.is_empty() {
+                                let session_id = thread.id().clone();
+                                this.item(
+                                    ui::ContextMenuEntry::new("New From Summary")
+                                        .icon(ui::IconName::ThreadFromSummary)
+                                        .icon_color(Color::Muted)
+                                        .handler(move |window, cx| {
+                                            window.dispatch_action(
+                                                Box::new(crate::NewNativeAgentThreadFromSummary {
+                                                    from_session_id: session_id.clone(),
+                                                }),
+                                                cx,
+                                            );
+                                        }),
+                                )
+                            } else {
+                                this
+                            }
+                        })
+                        .item(
+                            ui::ContextMenuEntry::new("Zed Agent")
+                                .when(is_agent_selected(AgentType::NativeAgent) | is_agent_selected(AgentType::TextThread), |this| {
+                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
+                                })
+                                .icon(ui::IconName::ZedAgent)
+                                .icon_color(Color::Muted)
+                                .handler(move |window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::NewExternalAgentThread {
+                                            agent: Some(crate::ExternalAgent::NativeAgent),
+                                        }),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .item(
+                            ui::ContextMenuEntry::new("Text Thread")
+                                .action(Box::new(crate::NewTextThread))
+                                .icon(ui::IconName::TextThread)
+                                .icon_color(Color::Muted)
+                                .handler(move |window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::NewTextThread),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .separator()
+                        .header("External Agents")
+                        .item(
+                            ui::ContextMenuEntry::new("Claude Code")
+                                .when(is_agent_selected(AgentType::ClaudeCode), |this| {
+                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
+                                })
+                                .icon(ui::IconName::AiClaude)
+                                .disabled(is_via_collab)
+                                .icon_color(Color::Muted)
+                                .handler(move |window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::NewExternalAgentThread {
+                                            agent: Some(crate::ExternalAgent::ClaudeCode),
+                                        }),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .item(
+                            ui::ContextMenuEntry::new("Codex CLI")
+                                .when(is_agent_selected(AgentType::Codex), |this| {
+                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
+                                })
+                                .icon(ui::IconName::AiOpenAi)
+                                .disabled(is_via_collab)
+                                .icon_color(Color::Muted)
+                                .handler(move |window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::NewExternalAgentThread {
+                                            agent: Some(crate::ExternalAgent::Codex),
+                                        }),
+                                        cx,
+                                    );
+                                }),
+                        )
+                        .item(
+                            ui::ContextMenuEntry::new("Gemini CLI")
+                                .when(is_agent_selected(AgentType::Gemini), |this| {
+                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
+                                })
+                                .icon(ui::IconName::AiGemini)
+                                .icon_color(Color::Muted)
+                                .disabled(is_via_collab)
+                                .handler(move |window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(crate::NewExternalAgentThread {
+                                            agent: Some(crate::ExternalAgent::Gemini),
+                                        }),
+                                        cx,
+                                    );
+                                }),
+                        );
+
+                    // Add custom agent servers
+                    let agent_server_store = agent_server_store.read(cx);
+                    let agent_names = agent_server_store
+                        .external_agents()
+                        .filter(|name| {
+                            name.0 != GEMINI_NAME
+                                && name.0 != CLAUDE_CODE_NAME
+                                && name.0 != CODEX_NAME
+                        })
+                        .cloned()
+                        .collect::<Vec<_>>();
+
+                    for agent_name in agent_names {
+                        let icon_path = agent_server_store.agent_icon(&agent_name);
+                        let display_name = agent_server_store
+                            .agent_display_name(&agent_name)
+                            .unwrap_or_else(|| agent_name.0.clone());
+
+                        let mut entry = ui::ContextMenuEntry::new(display_name);
+
+                        if let Some(icon_path) = icon_path {
+                            entry = entry.custom_icon_svg(icon_path);
+                        } else {
+                            entry = entry.icon(ui::IconName::Sparkle);
+                        }
+
+                        entry = entry.icon_color(Color::Muted);
+
+                        let agent_name_for_handler = agent_name.clone();
+                        entry = entry.handler(move |window, cx| {
+                            window.dispatch_action(
+                                Box::new(crate::NewExternalAgentThread {
+                                    agent: Some(crate::ExternalAgent::Custom {
+                                        name: agent_name_for_handler.0.clone(),
+                                    }),
+                                }),
+                                cx,
+                            );
+                        });
+
+                        menu = menu.item(entry);
+                    }
+
+                    menu = menu
+                        .separator()
+                        .item(
+                            ui::ContextMenuEntry::new("Add More Agents")
+                                .icon(ui::IconName::Plus)
+                                .icon_color(Color::Muted)
+                                .handler(move |window, cx| {
+                                    window.dispatch_action(
+                                        Box::new(zed_actions::Extensions {
+                                            category_filter: Some(
+                                                zed_actions::ExtensionCategoryFilter::AgentServers,
+                                            ),
+                                            id: None,
+                                        }),
+                                        cx,
+                                    );
+                                }),
+                        );
+
+                    menu
+                }))
+            })
+    }
+
+    fn render_panel_options_menu(
+        &self,
+        _window: &mut Window,
+        cx: &Context<Self>,
+    ) -> impl IntoElement {
+        let user_store = self.user_store.read(cx);
+        let usage = user_store.model_request_usage();
+        let account_url = client::zed_urls::account_url(cx);
+
+        let selected_agent = self.selected_agent.clone();
+
+        let text_thread_view = match &self.active_view {
+            ActiveView::TextThread {
+                text_thread_editor, ..
+            } => Some(text_thread_editor.clone()),
+            _ => None,
+        };
+        let text_thread_with_messages = match &self.active_view {
+            ActiveView::TextThread {
+                text_thread_editor, ..
+            } => text_thread_editor
+                .read(cx)
+                .text_thread()
+                .read(cx)
+                .messages(cx)
+                .any(|message| message.role == language_model::Role::Assistant),
+            _ => false,
+        };
+
+        let thread_view = match &self.active_view {
+            ActiveView::ExternalAgentThread { thread_view } => Some(thread_view.clone()),
+            _ => None,
+        };
+        let thread_with_messages = match &self.active_view {
+            ActiveView::ExternalAgentThread { thread_view } => {
+                thread_view.read(cx).has_user_submitted_prompt(cx)
+            }
+            _ => false,
+        };
+
+        ui::PopoverMenu::new("agent-options-menu")
+            .trigger_with_tooltip(
+                ui::IconButton::new("agent-options-menu", ui::IconName::Ellipsis)
+                    .icon_size(ui::IconSize::Small),
+                ui::Tooltip::text("Toggle Agent Menu"),
+            )
+            .anchor(gpui::Corner::TopRight)
+            .with_handle(self.agent_panel_menu_handle.clone())
+            .menu(move |_window, cx| {
+                Some(ContextMenu::build(_window, cx, |mut menu, _window, _| {
+                    if let Some(usage) = usage {
+                        menu = menu
+                            .header_with_link("Prompt Usage", "Manage", account_url.clone())
+                            .custom_entry(
+                                move |_window, cx| {
+                                    use cloud_llm_client::UsageLimit;
+
+                                    let used_percentage = match usage.limit {
+                                        UsageLimit::Limited(limit) => {
+                                            Some((usage.amount as f32 / limit as f32) * 100.)
+                                        }
+                                        UsageLimit::Unlimited => None,
+                                    };
+
+                                    h_flex()
+                                        .flex_1()
+                                        .gap_1p5()
+                                        .children(used_percentage.map(|percent| {
+                                            ui::ProgressBar::new("usage", percent, 100., cx)
+                                        }))
+                                        .child(
+                                            Label::new(match usage.limit {
+                                                UsageLimit::Limited(limit) => {
+                                                    format!("{} / {limit}", usage.amount)
+                                                }
+                                                UsageLimit::Unlimited => {
+                                                    format!("{} / ∞", usage.amount)
+                                                }
+                                            })
+                                            .size(ui::LabelSize::Small)
+                                            .color(Color::Muted),
+                                        )
+                                        .into_any_element()
+                                },
+                                move |_, cx| cx.open_url(&client::zed_urls::account_url(cx)),
+                            )
+                            .separator()
+                    }
+
+                    if thread_with_messages | text_thread_with_messages {
+                        menu = menu.header("Current Thread");
+
+                        if let Some(text_thread_view) = text_thread_view.as_ref() {
+                            menu = menu
+                                .entry("Regenerate Thread Title", None, {
+                                    let text_thread_view = text_thread_view.clone();
+                                    move |_, cx| {
+                                        text_thread_view.update(cx, |editor, cx| {
+                                            editor.regenerate_summary(cx);
+                                        });
+                                    }
+                                })
+                                .separator();
+                        }
+
+                        if let Some(thread_view) = thread_view.as_ref() {
+                            menu = menu
+                                .entry("Regenerate Thread Title", None, {
+                                    let thread_view = thread_view.clone();
+                                    move |_, cx| {
+                                        if let Some(native_thread) =
+                                            thread_view.read(cx).as_native_thread(cx)
+                                        {
+                                            native_thread.update(cx, |thread, cx| {
+                                                thread.generate_title(cx);
+                                            });
+                                        }
+                                    }
+                                })
+                                .separator();
+                        }
+                    }
+
+                    menu = menu
+                        .header("MCP Servers")
+                        .action(
+                            "View Server Extensions",
+                            Box::new(zed_actions::Extensions {
+                                category_filter: Some(
+                                    zed_actions::ExtensionCategoryFilter::ContextServers,
+                                ),
+                                id: None,
+                            }),
+                        )
+                        .action("Add Custom Server…", Box::new(crate::AddContextServer))
+                        .separator()
+                        .action("Rules", Box::new(zed_actions::assistant::OpenRulesLibrary::default()))
+                        .action("Profiles", Box::new(crate::ManageProfiles::default()))
+                        .action("Settings", Box::new(zed_actions::agent::OpenSettings))
+                        .separator();
+
+                    if selected_agent == AgentType::Gemini {
+                        menu = menu.action("Reauthenticate", Box::new(zed_actions::agent::ReauthenticateAgent))
+                    }
+
+                    menu
+                }))
+            })
+    }
+
+    fn render_recent_entries_menu(
+        &self,
+        icon: ui::IconName,
+        corner: gpui::Corner,
+        _cx: &Context<Self>,
+    ) -> impl IntoElement {
+        ui::PopoverMenu::new("agent-nav-menu")
+            .trigger_with_tooltip(
+                ui::IconButton::new("agent-nav-menu", icon).icon_size(ui::IconSize::Small),
+                ui::Tooltip::text("Toggle Recently Updated Threads"),
+            )
+            .anchor(corner)
+            .with_handle(self.agent_navigation_menu_handle.clone())
+            .menu({
+                let menu = self.agent_navigation_menu.clone();
+                move |_window, cx| {
+                    telemetry::event!("View Thread History Clicked");
+
+                    if let Some(menu) = menu.as_ref() {
+                        menu.update(cx, |_, cx| {
+                            cx.defer_in(_window, |menu, window, cx| {
+                                menu.rebuild(window, cx);
+                            });
+                        })
+                    }
+                    menu.clone()
+                }
+            })
+    }
+
+    pub fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        let show_history_menu = self.history_kind_for_selected_agent().is_some();
+
+        let left_section = h_flex()
+            .size_full()
+            .gap_2()
+            .child(match &self.active_view {
+                ActiveView::History { .. } | ActiveView::Configuration => {
+                    self.render_toolbar_back_button(cx).into_any_element()
+                }
+                _ => self.render_selected_agent_icon(cx),
+            })
+            .child(self.render_title_view(window, cx));
+
+        let right_section = h_flex()
+            .flex_none()
+            .gap_2()
+            .px_2()
+            .child(self.render_new_thread_menu(window, cx))
+            .when(show_history_menu, |this| {
+                this.child(self.render_recent_entries_menu(
+                    ui::IconName::MenuAltTemp,
+                    gpui::Corner::TopRight,
+                    cx,
+                ))
+            })
+            .child(self.render_panel_options_menu(window, cx));
 
         h_flex()
             .h_10()
             .w_full()
             .flex_none()
-            .px_2()
-            .gap_2()
             .bg(cx.theme().colors().tab_bar_background)
             .border_b_1()
             .border_color(cx.theme().colors().border)
-            .child(
-                h_flex()
-                    .flex_1()
-                    .gap_2()
-                    .items_center()
-                    .child(Label::new(title).color(Color::Default))
-            )
+            .child(left_section)
+            .child(right_section)
             .into_any_element()
     }
 
