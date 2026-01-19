@@ -221,14 +221,6 @@ impl Item for AgentChatView {
         h_flex()
             .gap_2()
             .child(
-                Icon::new(IconName::ZedAssistant)
-                    .color(if params.selected {
-                        Color::Default
-                    } else {
-                        Color::Muted
-                    })
-            )
-            .child(
                 Label::new(title).color(if params.selected {
                     Color::Default
                 } else {
