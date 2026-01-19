@@ -42,6 +42,8 @@
       "cmd-,": "zed::OpenSettings",
       "cmd-alt-,": "zed::OpenSettingsFile",
       "cmd-q": "zed::Quit",
+      "cmd-shift-a": "agent::OpenAgentChat",
+      "cmd-?": "agent::FocusAgentChat",
       "cmd-h": "zed::Hide",
       "alt-cmd-h": "zed::HideOthers",
       "cmd-m": "zed::Minimize",
