@@ -1,4 +1,6 @@
 pub mod acp;
+mod agent_chat_content;
+mod agent_chat_view;
 mod agent_configuration;
 mod agent_diff;
 mod agent_model_selector;
@@ -46,6 +48,7 @@ use settings::{LanguageModelSelection, Settings as _, SettingsStore};
 use std::any::TypeId;
 
 use crate::agent_configuration::{ConfigureContextServerModal, ManageProfilesModal};
+pub use crate::agent_chat_view::AgentChatView;
 pub use crate::agent_panel::{AgentPanel, ConcreteAssistantPanelDelegate};
 pub use crate::inline_assistant::InlineAssistant;
 pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};
@@ -257,17 +260,42 @@ pub fn init(
     }
     assistant_slash_command::init(cx);
     agent_panel::init(cx);
+    agent_chat_view::register_serializable_item(cx);
     context_server_configuration::init(language_registry.clone(), fs.clone(), cx);
     TextThreadEditor::init(cx);
 
     register_slash_commands(cx);
     inline_assistant::init(fs.clone(), prompt_builder.clone(), cx);
+
+    // Clone prompt_builder before it's moved
+    let prompt_builder_for_chat = prompt_builder.clone();
     terminal_inline_assistant::init(fs.clone(), prompt_builder, cx);
     cx.observe_new(move |workspace, window, cx| {
         ConfigureContextServerModal::register(workspace, language_registry.clone(), window, cx)
     })
     .detach();
     cx.observe_new(ManageProfilesModal::register).detach();
+
+    // Register agent chat view actions
+    let prompt_builder_for_open = prompt_builder_for_chat.clone();
+    let prompt_builder_for_focus = prompt_builder_for_chat.clone();
+    cx.observe_new(move |workspace: &mut workspace::Workspace, _window, _cx| {
+        let pb_open = prompt_builder_for_open.clone();
+        let pb_focus = prompt_builder_for_focus.clone();
+        workspace
+            .register_action(move |workspace, _: &zed_actions::agent::OpenAgentChat, window, cx| {
+                AgentChatView::open(workspace, pb_open.clone(), window, cx);
+            })
+            .register_action(move |workspace, _: &zed_actions::agent::FocusAgentChat, window, cx| {
+                let existing = workspace.items_of_type::<AgentChatView>(cx).next();
+                if let Some(chat) = existing {
+                    workspace.activate_item(&chat, true, true, window, cx);
+                } else {
+                    AgentChatView::open(workspace, pb_focus.clone(), window, cx);
+                }
+            });
+    })
+    .detach();
 
     // Update command palette filter based on AI settings
     update_command_palette_filter(cx);

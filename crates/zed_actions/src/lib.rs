@@ -377,6 +377,14 @@ pub mod agent {
             ToggleAgentPane,
             /// Pastes clipboard content without any formatting.
             PasteRaw,
+            /// Opens the agent chat in the center pane.
+            OpenAgentChat,
+            /// Opens the agent chat as a split with the current item.
+            OpenAgentChatSplit,
+            /// Toggles the agent chat visibility.
+            ToggleAgentChat,
+            /// Focuses the agent chat if open, otherwise opens it.
+            FocusAgentChat,
         ]
     );
 }
