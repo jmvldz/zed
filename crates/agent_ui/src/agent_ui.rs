@@ -278,7 +278,7 @@ pub fn init(
 
     // Register agent chat view actions
     let prompt_builder_for_open = prompt_builder_for_chat.clone();
-    let prompt_builder_for_focus = prompt_builder_for_chat.clone();
+    let prompt_builder_for_focus = prompt_builder_for_chat;
     cx.observe_new(move |workspace: &mut workspace::Workspace, _window, _cx| {
         let pb_open = prompt_builder_for_open.clone();
         let pb_focus = prompt_builder_for_focus.clone();

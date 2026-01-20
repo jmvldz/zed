@@ -297,35 +297,6 @@ impl ActiveView {
         }
     }
 
-    fn native_agent(
-        fs: Arc<dyn Fs>,
-        prompt_store: Option<Entity<PromptStore>>,
-        thread_store: Entity<ThreadStore>,
-        project: Entity<Project>,
-        workspace: WeakEntity<Workspace>,
-        history: Entity<AcpThreadHistory>,
-        window: &mut Window,
-        cx: &mut App,
-    ) -> Self {
-        let thread_view = cx.new(|cx| {
-            crate::acp::AcpThreadView::new(
-                ExternalAgent::NativeAgent.server(fs, thread_store.clone()),
-                None,
-                None,
-                workspace,
-                project,
-                Some(thread_store),
-                prompt_store,
-                history,
-                false,
-                window,
-                cx,
-            )
-        });
-
-        Self::ExternalAgentThread { thread_view }
-    }
-
     fn claude_code(
         fs: Arc<dyn Fs>,
         thread_store: Entity<ThreadStore>,

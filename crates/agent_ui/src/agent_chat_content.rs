@@ -6,7 +6,7 @@ use agent_servers::AgentServer;
 use anyhow::Result;
 use assistant_slash_command::SlashCommandWorkingSet;
 use assistant_text_thread::TextThread;
-use db::kvp::{Dismissable, KEY_VALUE_STORE};
+use db::kvp::KEY_VALUE_STORE;
 use editor::Editor;
 use fs::Fs;
 use gpui::{
@@ -25,12 +25,9 @@ use crate::{
     ExternalAgent,
     acp::{AcpThreadHistory, AcpThreadView, ThreadHistoryEvent},
     agent_configuration::{AgentConfiguration, AssistantConfigurationEvent},
-    agent_panel::OnboardingUpsell,
     text_thread_editor::{TextThreadEditor, make_lsp_adapter_delegate},
     text_thread_history::{TextThreadHistory, TextThreadHistoryEvent},
 };
-use ai_onboarding::AgentPanelOnboarding;
-use client::UserStore;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HistoryKind {
@@ -55,35 +52,6 @@ pub enum ActiveView {
 }
 
 impl ActiveView {
-    pub(crate) fn native_agent(
-        fs: Arc<dyn Fs>,
-        prompt_store: Option<Entity<PromptStore>>,
-        thread_store: Entity<ThreadStore>,
-        project: Entity<Project>,
-        workspace: WeakEntity<Workspace>,
-        history: Entity<AcpThreadHistory>,
-        window: &mut Window,
-        cx: &mut Context<AgentChatContent>,
-    ) -> Self {
-        let server = ExternalAgent::NativeAgent.server(fs, thread_store.clone());
-        let thread_view = cx.new(|cx| {
-            AcpThreadView::new(
-                server,
-                None,
-                None,
-                workspace,
-                project,
-                Some(thread_store),
-                prompt_store.clone(),
-                history,
-                false,
-                window,
-                cx,
-            )
-        });
-        ActiveView::ExternalAgentThread { thread_view }
-    }
-
     pub(crate) fn claude_code(
         fs: Arc<dyn Fs>,
         thread_store: Entity<ThreadStore>,
@@ -144,21 +112,6 @@ impl ActiveView {
             _subscriptions: vec![],
         }
     }
-
-    pub fn which_font_size_used(&self) -> WhichFontSize {
-        match self {
-            ActiveView::ExternalAgentThread { .. } => WhichFontSize::AgentFont,
-            ActiveView::TextThread { .. } => WhichFontSize::BufferFont,
-            ActiveView::History { .. } | ActiveView::Configuration => WhichFontSize::None,
-        }
-    }
-}
-
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum WhichFontSize {
-    AgentFont,
-    BufferFont,
-    None,
 }
 
 #[derive(Clone, PartialEq, Eq, Debug, Default, Serialize, Deserialize)]
@@ -205,7 +158,6 @@ pub enum AgentChatContentEvent {
 pub struct AgentChatContent {
     pub(crate) workspace: WeakEntity<Workspace>,
     pub(crate) loading: bool,
-    pub(crate) user_store: Entity<UserStore>,
     pub(crate) project: Entity<Project>,
     pub(crate) fs: Arc<dyn Fs>,
     pub(crate) language_registry: Arc<LanguageRegistry>,
@@ -224,10 +176,7 @@ pub struct AgentChatContent {
     pub(crate) agent_navigation_menu_handle: PopoverMenuHandle<ContextMenu>,
     pub(crate) agent_navigation_menu: Option<Entity<ContextMenu>>,
     pub(crate) _extension_subscription: Option<Subscription>,
-    pub(crate) onboarding: Entity<AgentPanelOnboarding>,
     pub(crate) selected_agent: AgentType,
-    pub(crate) show_trust_workspace_message: bool,
-    pub(crate) show_history_sidebar: bool,
 }
 
 impl EventEmitter<AgentChatContentEvent> for AgentChatContent {}
@@ -274,10 +223,8 @@ impl AgentChatContent {
         cx: &mut Context<Self>,
     ) -> Self {
         let fs = workspace.app_state().fs.clone();
-        let user_store = workspace.app_state().user_store.clone();
         let project = workspace.project();
         let language_registry = project.read(cx).languages().clone();
-        let client = workspace.client().clone();
         let workspace_weak = workspace.weak_handle();
 
         let context_server_registry =
@@ -327,17 +274,6 @@ impl AgentChatContent {
             cx,
         );
 
-        let onboarding = cx.new(|cx| {
-            AgentPanelOnboarding::new(
-                user_store.clone(),
-                client,
-                |_window, cx| {
-                    OnboardingUpsell::set_dismissed(true, cx);
-                },
-                cx,
-            )
-        });
-
         // Subscribe to extension events to sync agent servers when extensions change
         let extension_subscription = if let Some(extension_events) =
             extension::ExtensionEvents::try_global(cx)
@@ -357,7 +293,6 @@ impl AgentChatContent {
         let mut content = Self {
             active_view,
             workspace: workspace_weak,
-            user_store,
             project: project.clone(),
             fs: fs.clone(),
             language_registry,
@@ -372,14 +307,11 @@ impl AgentChatContent {
             agent_navigation_menu_handle: PopoverMenuHandle::default(),
             agent_navigation_menu: None,
             _extension_subscription: extension_subscription,
-            onboarding,
             acp_history,
             text_thread_history,
             thread_store,
             selected_agent: AgentType::default(),
             loading: false,
-            show_trust_workspace_message: false,
-            show_history_sidebar: true,
         };
 
         content.sync_agent_servers_from_extensions(cx);
@@ -398,11 +330,11 @@ impl AgentChatContent {
     pub fn active_thread_title(&self, cx: &App) -> Option<SharedString> {
         match &self.active_view {
             ActiveView::ExternalAgentThread { thread_view } => {
-                Some(thread_view.read(cx).title(cx).into())
+                Some(thread_view.read(cx).title(cx))
             }
             ActiveView::TextThread {
                 text_thread_editor, ..
-            } => Some(text_thread_editor.read(cx).title(cx).into()),
+            } => Some(text_thread_editor.read(cx).title(cx)),
             ActiveView::History { .. } => Some("History".into()),
             ActiveView::Configuration => Some("Configuration".into()),
         }
@@ -450,7 +382,7 @@ impl AgentChatContent {
 
         self.set_active_view(
             ActiveView::text_thread(
-                text_thread_editor.clone(),
+                text_thread_editor,
                 self.language_registry.clone(),
                 window,
                 cx,
@@ -1530,7 +1462,7 @@ impl AgentChatContent {
             )
         });
 
-        let view = ActiveView::ExternalAgentThread { thread_view: thread_view.clone() };
+        let view = ActiveView::ExternalAgentThread { thread_view };
 
         self.set_active_view(view, !loading, window, cx);
     }
