@@ -261,8 +261,7 @@ pub struct ContextServerPresetContent {
 #[serde(rename_all = "snake_case")]
 pub enum DefaultAgentView {
     #[default]
-    Thread,
-    TextThread,
+    ClaudeCode,
 }
 
 #[derive(
