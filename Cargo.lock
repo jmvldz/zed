@@ -16072,64 +16072,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "swarm_chat"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "collections",
- "editor",
- "futures 0.3.31",
- "gpui",
- "language",
- "log",
- "markdown",
- "picker",
- "serde",
- "serde_json",
- "settings",
- "smol",
- "swarm_store",
- "theme",
- "ui",
- "util",
- "uuid",
-]
-
-[[package]]
-name = "swarm_file_picker"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "collections",
- "fs",
- "fuzzy",
- "git",
- "gpui",
- "picker",
- "serde",
- "settings",
- "theme",
- "ui",
- "util",
-]
-
-[[package]]
-name = "swarm_store"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "db",
- "gpui",
- "log",
- "paths",
- "serde",
- "serde_json",
- "sqlez",
- "sqlez_macros",
- "uuid",
-]
-
-[[package]]
 name = "swash"
 version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -21188,40 +21130,6 @@ name = "zed_proto"
 version = "0.3.1"
 dependencies = [
  "zed_extension_api 0.7.0",
-]
-
-[[package]]
-name = "zed_swarm"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "clap",
- "collections",
- "db",
- "editor",
- "fs",
- "futures 0.3.31",
- "git",
- "gpui",
- "log",
- "markdown",
- "menu",
- "paths",
- "picker",
- "reqwest_client",
- "rust-embed",
- "serde",
- "serde_json",
- "settings",
- "simplelog",
- "smol",
- "swarm_chat",
- "swarm_file_picker",
- "swarm_store",
- "theme",
- "ui",
- "util",
- "uuid",
 ]
 
 [[package]]
