@@ -74,12 +74,6 @@ impl AgentChatView {
         window: &mut Window,
         cx: &mut Context<Workspace>,
     ) {
-        let existing = workspace.items_of_type::<AgentChatView>(cx).next();
-        if let Some(existing) = existing {
-            workspace.activate_item(&existing, true, true, window, cx);
-            return;
-        }
-
         let workspace_handle = workspace.weak_handle();
         cx.spawn_in(window, async move |workspace, cx| {
             let content = AgentChatContent::load(workspace_handle.clone(), prompt_builder, cx.clone()).await?;
