@@ -173,10 +173,17 @@ impl Render for AgentChatView {
                         .thread_from_session_id(&from_session_id);
 
                     if let Some(thread) = thread {
+                        let session_info = acp_thread::AgentSessionInfo {
+                            session_id: thread.id.clone(),
+                            cwd: None,
+                            title: Some(thread.title.clone()),
+                            updated_at: Some(thread.updated_at),
+                            meta: None,
+                        };
                         content.external_thread(
                             Some(crate::ExternalAgent::NativeAgent),
                             None,
-                            Some(thread.clone()),
+                            Some(session_info),
                             window,
                             cx,
                         );
@@ -260,7 +267,7 @@ impl Item for AgentChatView {
 
     fn navigate(
         &mut self,
-        _data: Box<dyn Any>,
+        _data: Arc<dyn Any + Send>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> bool {

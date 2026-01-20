@@ -1,6 +1,7 @@
 use std::{path::Path, sync::Arc};
 
-use agent::{ContextServerRegistry, DbThreadMetadata, ThreadStore};
+use acp_thread::AgentSessionInfo;
+use agent::{ContextServerRegistry, ThreadStore};
 use agent_servers::AgentServer;
 use anyhow::Result;
 use assistant_slash_command::SlashCommandWorkingSet;
@@ -60,6 +61,7 @@ impl ActiveView {
         thread_store: Entity<ThreadStore>,
         project: Entity<Project>,
         workspace: WeakEntity<Workspace>,
+        history: Entity<AcpThreadHistory>,
         window: &mut Window,
         cx: &mut Context<AgentChatContent>,
     ) -> Self {
@@ -71,8 +73,9 @@ impl ActiveView {
                 None,
                 workspace,
                 project,
-                thread_store.clone(),
+                Some(thread_store),
                 prompt_store.clone(),
+                history,
                 false,
                 window,
                 cx,
@@ -86,6 +89,7 @@ impl ActiveView {
         thread_store: Entity<ThreadStore>,
         project: Entity<Project>,
         workspace: WeakEntity<Workspace>,
+        history: Entity<AcpThreadHistory>,
         window: &mut Window,
         cx: &mut Context<AgentChatContent>,
     ) -> Self {
@@ -97,8 +101,9 @@ impl ActiveView {
                 None,
                 workspace,
                 project,
-                thread_store.clone(),
+                Some(thread_store),
                 None,
+                history,
                 false,
                 window,
                 cx,
@@ -279,7 +284,7 @@ impl AgentChatContent {
             cx.new(|cx| ContextServerRegistry::new(project.read(cx).context_server_store(), cx));
 
         let thread_store = cx.new(|cx| ThreadStore::new(cx));
-        let acp_history = cx.new(|cx| AcpThreadHistory::new(thread_store.clone(), window, cx));
+        let acp_history = cx.new(|cx| AcpThreadHistory::new(None, window, cx));
         let text_thread_history =
             cx.new(|cx| TextThreadHistory::new(text_thread_store.clone(), window, cx));
 
@@ -317,6 +322,7 @@ impl AgentChatContent {
             thread_store.clone(),
             project.clone(),
             workspace_weak.clone(),
+            acp_history.clone(),
             window,
             cx,
         );
@@ -458,8 +464,8 @@ impl AgentChatContent {
     pub fn external_thread(
         &mut self,
         agent_choice: Option<ExternalAgent>,
-        resume_thread: Option<DbThreadMetadata>,
-        summarize_thread: Option<DbThreadMetadata>,
+        resume_thread: Option<AgentSessionInfo>,
+        summarize_thread: Option<AgentSessionInfo>,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -1280,8 +1286,7 @@ impl AgentChatContent {
         _window: &mut Window,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let user_store = self.user_store.read(cx);
-        let usage = user_store.model_request_usage();
+        let usage: Option<client::RequestUsage> = None;
         let account_url = client::zed_urls::account_url(cx);
 
         let selected_agent = self.selected_agent.clone();
@@ -1499,8 +1504,8 @@ impl AgentChatContent {
     fn _external_thread(
         &mut self,
         server: std::rc::Rc<dyn AgentServer>,
-        resume_thread: Option<DbThreadMetadata>,
-        summarize_thread: Option<DbThreadMetadata>,
+        resume_thread: Option<AgentSessionInfo>,
+        summarize_thread: Option<AgentSessionInfo>,
         workspace: WeakEntity<Workspace>,
         project: Entity<Project>,
         loading: bool,
@@ -1508,6 +1513,7 @@ impl AgentChatContent {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let history = self.acp_history.clone();
         let thread_view = cx.new(|cx| {
             AcpThreadView::new(
                 server,
@@ -1515,8 +1521,9 @@ impl AgentChatContent {
                 summarize_thread,
                 workspace.clone(),
                 project.clone(),
-                self.thread_store.clone(),
+                Some(self.thread_store.clone()),
                 self.prompt_store.clone(),
+                history,
                 !loading,
                 window,
                 cx,

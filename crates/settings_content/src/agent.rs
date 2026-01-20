@@ -262,6 +262,8 @@ pub struct ContextServerPresetContent {
 pub enum DefaultAgentView {
     #[default]
     ClaudeCode,
+    Thread,
+    TextThread,
 }
 
 #[derive(
