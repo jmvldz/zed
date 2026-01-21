@@ -7,6 +7,14 @@ This plan implements a new workspace model where:
 - Each git worktree is its own workspace
 - Multiple agent chats are associated with each workspace
 - Quick switching between workspaces via sidebar and keyboard shortcuts
+- Single-window only (multi-window support deferred)
+
+## Single-Window Scope (MVP)
+
+For the initial rollout, Zed will run with a single window. This simplifies
+workspace switching and layout persistence because there is only one active
+workspace slot and one layout state at a time. Multi-window support will require
+moving active slot state and layout persistence into a window-scoped session.
 
 ## Architecture Diagram
 
@@ -51,6 +59,9 @@ WorkspaceRegistry (Global Entity)
         ├── state: SlotState (Active | Cached | Unloaded)
         ├── project: Option<Entity<Project>>
         └── serialized: Option<SerializedWorkspaceSlot>
+
+Note: `WorkspaceRegistry.active_slot_id` is acceptable under the single-window
+constraint. For multi-window, this must move to a per-window session.
 ```
 
 ---
@@ -1825,6 +1836,7 @@ impl Workspace {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> Task<Result<()>> {
+        // Single-window assumption: active slot is global for the app.
         // Don't switch if already active
         if self.active_slot_id == Some(slot_id) {
             return Task::ready(Ok(()));
@@ -3974,6 +3986,7 @@ async fn test_agent_chat_filtering(cx: &mut TestAppContext) {
 1. **Feature flag off by default** - No change for existing users
 2. **Opt-in via settings** - Users enable `multi_workspace_mode: true`
 3. **Gradual rollout** - Staff first, then general availability
+4. **Single-window only** - Multi-window support deferred until session-scoped state exists
 
 ### Data Migration
 
