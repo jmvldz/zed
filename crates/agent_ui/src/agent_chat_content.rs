@@ -292,7 +292,7 @@ impl AgentChatContent {
             let agent_navigation_menu =
                 ContextMenu::build_persistent(window, cx, move |mut menu, _window, cx| {
                     if let Some(content) = content.upgrade() {
-                        if let Some(kind) = content.read(cx).history_kind_for_selected_agent() {
+                        if let Some(kind) = content.read(cx).history_kind_for_selected_agent(cx) {
                             menu = Self::populate_recently_updated_menu_section(
                                 menu,
                                 content,
@@ -530,7 +530,7 @@ impl AgentChatContent {
     }
 
     pub fn open_history(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(kind) = self.history_kind_for_selected_agent() else {
+        let Some(kind) = self.history_kind_for_selected_agent(cx) else {
             return;
         };
 
@@ -599,14 +599,20 @@ impl AgentChatContent {
         }
     }
 
-    fn history_kind_for_selected_agent(&self) -> Option<HistoryKind> {
+    fn history_kind_for_selected_agent(&self, cx: &App) -> Option<HistoryKind> {
         match self.selected_agent {
             AgentType::NativeAgent => Some(HistoryKind::AgentThreads),
             AgentType::TextThread => Some(HistoryKind::TextThreads),
             AgentType::Gemini
             | AgentType::ClaudeCode
             | AgentType::Codex
-            | AgentType::Custom { .. } => None,
+            | AgentType::Custom { .. } => {
+                if self.acp_history.read(cx).has_session_list() {
+                    Some(HistoryKind::AgentThreads)
+                } else {
+                    None
+                }
+            }
         }
     }
 
@@ -1556,7 +1562,7 @@ impl AgentChatContent {
     }
 
     pub fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let show_history_menu = self.history_kind_for_selected_agent().is_some();
+        let show_history_menu = self.history_kind_for_selected_agent(cx).is_some();
 
         let left_section = h_flex()
             .size_full()
