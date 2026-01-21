@@ -1,16 +1,18 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use anyhow::Result;
+use anyhow::{Context as AnyhowContext, Result};
 use gpui::{
     App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
     SharedString, Subscription, Task, WeakEntity, Window, prelude::*,
 };
 use project::{Project, ProjectPath};
 use prompt_store::PromptBuilder;
+use serde::{Deserialize, Serialize};
 use ui::{prelude::*, Color, Icon, IconName, Label};
 use workspace::{
-    Item, ItemId, ItemNavHistory, SerializableItem, Workspace, WorkspaceId,
+    AppState, Item, ItemId, ItemNavHistory, SerializableItem, Workspace, WorkspaceId,
+    delete_unloaded_items,
     item::{BreadcrumbText, ItemBufferKind, ItemEvent, TabContentParams},
     searchable::SearchableItemHandle,
 };
@@ -344,12 +346,18 @@ impl SerializableItem for AgentChatView {
     }
 
     fn cleanup(
-        _workspace_id: WorkspaceId,
-        _alive_items: Vec<ItemId>,
+        workspace_id: WorkspaceId,
+        alive_items: Vec<ItemId>,
         _window: &mut Window,
-        _cx: &mut App,
+        cx: &mut App,
     ) -> Task<Result<()>> {
-        Task::ready(Ok(()))
+        delete_unloaded_items(
+            alive_items,
+            workspace_id,
+            "agent_chat_views",
+            &persistence::AGENT_CHAT_VIEW_DB,
+            cx,
+        )
     }
 
     fn deserialize(
@@ -360,8 +368,38 @@ impl SerializableItem for AgentChatView {
         _window: &mut Window,
         _cx: &mut App,
     ) -> Task<Result<Entity<Self>>> {
-        // TODO: Implement proper deserialization
-        Task::ready(Err(anyhow::anyhow!("AgentChatView deserialization not yet implemented")))
+        let workspace = _workspace.clone();
+        let workspace_id = _workspace_id;
+        let item_id = _item_id;
+        _window.spawn(_cx, async move |cx| {
+            let serialized = persistence::AGENT_CHAT_VIEW_DB
+                .get_state(item_id, workspace_id)
+                .context("Failed to load agent chat view state")?;
+
+            let prompt_builder = cx.update(|_window, cx| {
+                let app_state = AppState::global(cx)
+                    .upgrade()
+                    .context("app state gone")?;
+                anyhow::Ok(PromptBuilder::load(app_state.fs.clone(), false, cx))
+            })??;
+
+            let content = AgentChatContent::load(workspace.clone(), prompt_builder, cx.clone())
+                .await?;
+
+            let view = cx.update(|window, cx| {
+                let view = cx.new(|cx| Self::new(content, workspace, window, cx));
+                if let Some(selected_agent) = serialized.and_then(|state| state.selected_agent) {
+                    view.update(cx, |view, cx| {
+                        view.content.update(cx, |content, cx| {
+                            content.restore_agent(selected_agent, window, cx);
+                        });
+                    });
+                }
+                view
+            })?;
+
+            Ok(view)
+        })
     }
 
     fn serialize(
@@ -372,7 +410,17 @@ impl SerializableItem for AgentChatView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Task<Result<()>>> {
-        Some(Task::ready(Ok(())))
+        let workspace_id = _workspace.database_id()?;
+        let selected_agent = self.content.read(_cx).selected_agent.clone();
+        let state = SerializedAgentChatView {
+            selected_agent: Some(selected_agent),
+        };
+
+        Some(_cx.background_spawn(async move {
+            persistence::AGENT_CHAT_VIEW_DB
+                .save_state(_item_id, workspace_id, state)
+                .await
+        }))
     }
 
     fn should_serialize(&self, _event: &Self::Event) -> bool {
@@ -382,4 +430,88 @@ impl SerializableItem for AgentChatView {
 
 pub fn register_serializable_item(cx: &mut App) {
     workspace::register_serializable_item::<AgentChatView>(cx);
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct SerializedAgentChatView {
+    selected_agent: Option<crate::agent_chat_content::AgentType>,
+}
+
+mod persistence {
+    use super::SerializedAgentChatView;
+    use anyhow::Context as _;
+    use db::{
+        sqlez::{domain::Domain, thread_safe_connection::ThreadSafeConnection},
+        sqlez_macros::sql,
+    };
+    use workspace::{ItemId, WorkspaceDb, WorkspaceId};
+
+    pub struct AgentChatViewDb(ThreadSafeConnection);
+
+    impl Domain for AgentChatViewDb {
+        const NAME: &str = stringify!(AgentChatViewDb);
+
+        const MIGRATIONS: &[&str] = &[sql!(
+            CREATE TABLE agent_chat_views(
+                workspace_id INTEGER,
+                item_id INTEGER UNIQUE,
+                selected_agent TEXT,
+                PRIMARY KEY(workspace_id, item_id),
+                FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id)
+                ON DELETE CASCADE
+            ) STRICT;
+        )];
+    }
+
+    db::static_connection!(AGENT_CHAT_VIEW_DB, AgentChatViewDb, [WorkspaceDb]);
+
+    impl AgentChatViewDb {
+        pub async fn save_state(
+            &self,
+            item_id: ItemId,
+            workspace_id: WorkspaceId,
+            state: SerializedAgentChatView,
+        ) -> anyhow::Result<()> {
+            self.write(move |connection| {
+                let sql_stmt = sql!(
+                    INSERT OR REPLACE INTO agent_chat_views(item_id, workspace_id, selected_agent)
+                    VALUES (?, ?, ?)
+                );
+                let selected_agent = serde_json::to_string(&state.selected_agent)?;
+                let mut query =
+                    connection.exec_bound::<(ItemId, WorkspaceId, String)>(sql_stmt)?;
+                query((item_id, workspace_id, selected_agent)).context(format!(
+                    "exec_bound failed to execute or parse for: {}",
+                    sql_stmt
+                ))
+            })
+            .await
+        }
+
+        pub fn get_state(
+            &self,
+            item_id: ItemId,
+            workspace_id: WorkspaceId,
+        ) -> anyhow::Result<Option<SerializedAgentChatView>> {
+            let sql_stmt = sql!(
+                SELECT selected_agent FROM agent_chat_views WHERE item_id = ? AND workspace_id = ?
+            );
+            let selected_agent_str =
+                self.select_row_bound::<(ItemId, WorkspaceId), String>(sql_stmt)?(
+                    (item_id, workspace_id),
+                )
+                .context(format!(
+                    "Error in get_state, select_row_bound failed to execute or parse for: {}",
+                    sql_stmt
+                ))?;
+            let Some(selected_agent_str) = selected_agent_str else {
+                return Ok(None);
+            };
+            let selected_agent =
+                serde_json::from_str::<Option<crate::agent_chat_content::AgentType>>(
+                    &selected_agent_str,
+                )?;
+            Ok(Some(SerializedAgentChatView { selected_agent }))
+        }
+    }
 }

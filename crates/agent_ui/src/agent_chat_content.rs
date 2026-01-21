@@ -10,8 +10,8 @@ use db::kvp::KEY_VALUE_STORE;
 use editor::Editor;
 use fs::Fs;
 use gpui::{
-    AnimationExt, App, AsyncWindowContext, Entity, EventEmitter, Focusable,
-    Subscription, Task, WeakEntity, Window, prelude::*,
+    AnimationExt, App, AsyncWindowContext, DismissEvent, Entity, EventEmitter,
+    Focusable, Subscription, Task, WeakEntity, Window, prelude::*,
 };
 use language::LanguageRegistry;
 use project::Project;
@@ -34,6 +34,9 @@ pub enum HistoryKind {
     AgentThreads,
     TextThreads,
 }
+
+const RECENTLY_UPDATED_MENU_LIMIT: usize = 6;
+const DEFAULT_THREAD_TITLE: &str = "New Thread";
 
 pub enum ActiveView {
     ExternalAgentThread {
@@ -145,6 +148,18 @@ impl AgentType {
             Self::ClaudeCode => Some(ui::IconName::AiClaude),
             Self::Codex => Some(ui::IconName::AiOpenAi),
             Self::Custom { .. } => None,
+        }
+    }
+}
+
+impl From<ExternalAgent> for AgentType {
+    fn from(value: ExternalAgent) -> Self {
+        match value {
+            ExternalAgent::Gemini => Self::Gemini,
+            ExternalAgent::ClaudeCode => Self::ClaudeCode,
+            ExternalAgent::Codex => Self::Codex,
+            ExternalAgent::Custom { name } => Self::Custom { name },
+            ExternalAgent::NativeAgent => Self::NativeAgent,
         }
     }
 }
@@ -273,6 +288,48 @@ impl AgentChatContent {
             window,
             cx,
         );
+
+        let weak_content = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let content = weak_content.clone();
+            let agent_navigation_menu =
+                ContextMenu::build_persistent(window, cx, move |mut menu, _window, cx| {
+                    if let Some(content) = content.upgrade() {
+                        if let Some(kind) = content.read(cx).history_kind_for_selected_agent() {
+                            menu = Self::populate_recently_updated_menu_section(
+                                menu,
+                                content,
+                                kind,
+                                cx,
+                            );
+                            menu = menu.action("View All", Box::new(crate::OpenHistory));
+                        }
+                    }
+
+                    menu = menu
+                        .fixed_width(px(320.).into())
+                        .keep_open_on_confirm(false)
+                        .key_context("NavigationMenu");
+
+                    menu
+                });
+
+            weak_content
+                .update(cx, |content, cx| {
+                    cx.subscribe_in(
+                        &agent_navigation_menu,
+                        window,
+                        |_, menu, _: &DismissEvent, _window, cx| {
+                            menu.update(cx, |menu, _| {
+                                menu.clear_selected();
+                            });
+                        },
+                    )
+                    .detach();
+                    content.agent_navigation_menu = Some(agent_navigation_menu);
+                })
+                .ok();
+        });
 
         // Subscribe to extension events to sync agent servers when extensions change
         let extension_subscription = if let Some(extension_events) =
@@ -529,6 +586,10 @@ impl AgentChatContent {
         self.set_active_view(ActiveView::Configuration, true, window, cx);
     }
 
+    pub fn restore_agent(&mut self, agent_type: AgentType, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_agent_thread(agent_type, window, cx);
+    }
+
     pub fn go_back(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
         match self.active_view {
             ActiveView::Configuration | ActiveView::History { .. } => {
@@ -550,6 +611,101 @@ impl AgentChatContent {
             | AgentType::Codex
             | AgentType::Custom { .. } => None,
         }
+    }
+
+    fn populate_recently_updated_menu_section(
+        mut menu: ContextMenu,
+        content: Entity<Self>,
+        kind: HistoryKind,
+        cx: &mut Context<ContextMenu>,
+    ) -> ContextMenu {
+        match kind {
+            HistoryKind::AgentThreads => {
+                let entries = content
+                    .read(cx)
+                    .acp_history
+                    .read(cx)
+                    .sessions()
+                    .iter()
+                    .take(RECENTLY_UPDATED_MENU_LIMIT)
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if entries.is_empty() {
+                    return menu;
+                }
+
+                menu = menu.header("Recently Updated");
+
+                for entry in entries {
+                    let title = entry
+                        .title
+                        .as_ref()
+                        .filter(|title| !title.is_empty())
+                        .cloned()
+                        .unwrap_or_else(|| SharedString::new_static(DEFAULT_THREAD_TITLE));
+
+                    menu = menu.entry(title, None, {
+                        let content = content.downgrade();
+                        let entry = entry.clone();
+                        move |window, cx| {
+                            let entry = entry.clone();
+                            content
+                                .update(cx, move |this, cx| {
+                                    this.external_thread(
+                                        Some(ExternalAgent::NativeAgent),
+                                        Some(entry.clone()),
+                                        None,
+                                        window,
+                                        cx,
+                                    );
+                                })
+                                .ok();
+                        }
+                    });
+                }
+            }
+            HistoryKind::TextThreads => {
+                let entries = content
+                    .read(cx)
+                    .text_thread_store
+                    .read(cx)
+                    .ordered_text_threads()
+                    .take(RECENTLY_UPDATED_MENU_LIMIT)
+                    .cloned()
+                    .collect::<Vec<_>>();
+
+                if entries.is_empty() {
+                    return menu;
+                }
+
+                menu = menu.header("Recently Updated");
+
+                for entry in entries {
+                    let title = if entry.title.is_empty() {
+                        SharedString::new_static(DEFAULT_THREAD_TITLE)
+                    } else {
+                        entry.title.clone()
+                    };
+
+                    menu = menu.entry(title, None, {
+                        let content = content.downgrade();
+                        let entry = entry.clone();
+                        move |window, cx| {
+                            let path = entry.path.clone();
+                            content
+                                .update(cx, move |this, cx| {
+                                    this.open_saved_text_thread(path.clone(), window, cx)
+                                        .detach_and_log_err(cx);
+                                })
+                                .ok();
+                        }
+                    });
+                }
+            }
+        }
+
+        menu.separator()
     }
 
     fn set_active_view(
@@ -1350,8 +1506,7 @@ impl AgentChatContent {
                         .separator()
                         .action("Rules", Box::new(zed_actions::assistant::OpenRulesLibrary::default()))
                         .action("Profiles", Box::new(crate::ManageProfiles::default()))
-                        .action("Settings", Box::new(zed_actions::agent::OpenSettings))
-                        .separator();
+                        .action("Settings", Box::new(zed_actions::agent::OpenSettings));
 
                     if selected_agent == AgentType::Gemini {
                         menu = menu.action("Reauthenticate", Box::new(zed_actions::agent::ReauthenticateAgent))
@@ -1441,10 +1596,15 @@ impl AgentChatContent {
         workspace: WeakEntity<Workspace>,
         project: Entity<Project>,
         loading: bool,
-        _ext_agent: ExternalAgent,
+        ext_agent: ExternalAgent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let selected_agent = AgentType::from(ext_agent);
+        if self.selected_agent != selected_agent {
+            self.selected_agent = selected_agent;
+        }
+
         let history = self.acp_history.clone();
         let thread_view = cx.new(|cx| {
             AcpThreadView::new(
