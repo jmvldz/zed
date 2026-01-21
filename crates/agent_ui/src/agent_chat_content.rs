@@ -255,13 +255,10 @@ impl AgentChatContent {
             window,
             |this, _, event, window, cx| match event {
                 ThreadHistoryEvent::Open(thread) => {
-                    this.external_thread(
-                        Some(ExternalAgent::NativeAgent),
-                        Some(thread.clone()),
-                        None,
-                        window,
-                        cx,
-                    );
+                    let Some(agent) = this.selected_external_agent() else {
+                        return;
+                    };
+                    this.external_thread(Some(agent), Some(thread.clone()), None, window, cx);
                 }
             },
         )
@@ -610,6 +607,17 @@ impl AgentChatContent {
             | AgentType::ClaudeCode
             | AgentType::Codex
             | AgentType::Custom { .. } => None,
+        }
+    }
+
+    fn selected_external_agent(&self) -> Option<ExternalAgent> {
+        match &self.selected_agent {
+            AgentType::NativeAgent => Some(ExternalAgent::NativeAgent),
+            AgentType::Gemini => Some(ExternalAgent::Gemini),
+            AgentType::ClaudeCode => Some(ExternalAgent::ClaudeCode),
+            AgentType::Codex => Some(ExternalAgent::Codex),
+            AgentType::Custom { name } => Some(ExternalAgent::Custom { name: name.clone() }),
+            AgentType::TextThread => None,
         }
     }
 

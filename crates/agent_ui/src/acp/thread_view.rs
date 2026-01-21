@@ -61,7 +61,7 @@ use zed_actions::assistant::OpenRulesLibrary;
 
 use super::config_options::ConfigOptionsView;
 use super::entry_view_state::EntryViewState;
-use super::thread_history::AcpThreadHistory;
+use super::thread_history::{AcpThreadHistory, ThreadHistoryEvent};
 use crate::acp::AcpModelSelectorPopover;
 use crate::acp::ModeSelector;
 use crate::acp::entry_view_state::{EntryViewEvent, ViewEvent};
@@ -7655,6 +7655,13 @@ impl AcpThreadView {
             history.delete_session(&entry.session_id, cx)
         });
         task.detach_and_log_err(cx);
+    }
+
+    pub fn open_history_entry(&mut self, entry: AgentSessionInfo, cx: &mut Context<Self>) {
+        let history = self.history.clone();
+        history.update(cx, |_, cx| {
+            cx.emit(ThreadHistoryEvent::Open(entry));
+        });
     }
 
     /// Returns the currently active editor, either for a message that is being

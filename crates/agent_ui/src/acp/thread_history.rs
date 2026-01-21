@@ -1,5 +1,5 @@
 use crate::acp::AcpThreadView;
-use crate::{AgentPanel, RemoveHistory, RemoveSelectedThread};
+use crate::{RemoveHistory, RemoveSelectedThread};
 use acp_thread::{AgentSessionInfo, AgentSessionList, AgentSessionListRequest};
 use agent_client_protocol as acp;
 use chrono::{Datelike as _, Local, NaiveDate, TimeDelta, Utc};
@@ -876,16 +876,11 @@ impl RenderOnce for AcpHistoryEntryElement {
                 let thread_view = self.thread_view.clone();
                 let entry = self.entry;
 
-                move |_event, window, cx| {
-                    if let Some(workspace) = thread_view
-                        .upgrade()
-                        .and_then(|view| view.read(cx).workspace().upgrade())
-                    {
-                        if let Some(panel) = workspace.read(cx).panel::<AgentPanel>(cx) {
-                            panel.update(cx, |panel, cx| {
-                                panel.load_agent_thread(entry.clone(), window, cx);
-                            });
-                        }
+                move |_event, _window, cx| {
+                    if let Some(thread_view) = thread_view.upgrade() {
+                        thread_view.update(cx, |thread_view, cx| {
+                            thread_view.open_history_entry(entry.clone(), cx);
+                        });
                     }
                 }
             })
