@@ -18,7 +18,7 @@ use project::Project;
 use prompt_store::{PromptBuilder, PromptStore};
 use serde::{Deserialize, Serialize};
 use settings::{DefaultAgentView as DefaultView, Settings};
-use ui::{Color, ContextMenu, Label, PopoverMenuHandle, prelude::*};
+use ui::{Color, Label, prelude::*};
 use util::ResultExt as _;
 use workspace::Workspace;
 
@@ -30,8 +30,6 @@ use crate::{
     text_thread_history::{TextThreadHistory, TextThreadHistoryEvent},
 };
 use agent_settings::AgentSettings;
-use ai_onboarding::AgentPanelOnboarding;
-use client::UserStore;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HistoryKind {
@@ -60,6 +58,7 @@ impl ActiveView {
         fs: Arc<dyn Fs>,
         prompt_store: Option<Entity<PromptStore>>,
         thread_store: Entity<ThreadStore>,
+        history: Entity<AcpThreadHistory>,
         project: Entity<Project>,
         workspace: WeakEntity<Workspace>,
         window: &mut Window,
@@ -73,8 +72,9 @@ impl ActiveView {
                 None,
                 workspace,
                 project,
-                thread_store.clone(),
+                Some(thread_store.clone()),
                 prompt_store.clone(),
+                history,
                 false,
                 window,
                 cx,
@@ -278,6 +278,7 @@ let panel_type = AgentSettings::get_global(cx).default_view;
                 fs.clone(),
                 prompt_store.clone(),
                 thread_store.clone(),
+                acp_history.clone(),
                 project.clone(),
                 workspace_weak.clone(),
                 window,
