@@ -269,6 +269,7 @@ impl Item for AgentChatView {
     }
 
     fn tab_bar_buttons(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let content = self.content.downgrade();
         vec![PopoverMenu::new("agent-options-menu")
             .trigger_with_tooltip(
                 IconButton::new("agent-options", IconName::Ellipsis).icon_size(IconSize::Small),
@@ -276,9 +277,28 @@ impl Item for AgentChatView {
             )
             .anchor(Corner::TopRight)
             .menu(move |window, cx| {
+                let content = content.clone();
                 Some(ContextMenu::build(window, cx, |menu, _, _| {
-                    menu.action("History", crate::OpenHistory.boxed_clone())
-                        .action("Settings", zed_actions::agent::OpenSettings.boxed_clone())
+                    menu.entry("History", None, {
+                        let content = content.clone();
+                        move |window, cx| {
+                            if let Some(content) = content.upgrade() {
+                                content.update(cx, |content, cx| {
+                                    content.open_history(window, cx);
+                                });
+                            }
+                        }
+                    })
+                    .entry("Settings", None, {
+                        let content = content.clone();
+                        move |window, cx| {
+                            if let Some(content) = content.upgrade() {
+                                content.update(cx, |content, cx| {
+                                    content.open_configuration(window, cx);
+                                });
+                            }
+                        }
+                    })
                 }))
             })
             .into_any_element()]

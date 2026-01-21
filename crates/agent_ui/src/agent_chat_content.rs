@@ -371,6 +371,13 @@ let panel_type = AgentSettings::get_global(cx).default_view;
         false
     }
 
+    pub fn should_show_toolbar(&self) -> bool {
+        matches!(
+            &self.active_view,
+            ActiveView::History { .. } | ActiveView::Configuration
+        )
+    }
+
     pub fn new_thread(
         &mut self,
         _action: &crate::NewThread,
@@ -877,56 +884,6 @@ let panel_type = AgentSettings::get_global(cx).default_view;
             .tooltip(ui::Tooltip::text("Go Back"))
     }
 
-    fn render_selected_agent_icon(&self, cx: &Context<Self>) -> gpui::AnyElement {
-        let agent_server_store = self.project.read(cx).agent_server_store().clone();
-
-        let (custom_icon, label) = if let AgentType::Custom { name } = &self.selected_agent {
-            let store = agent_server_store.read(cx);
-            let icon = store.agent_icon(&project::ExternalAgentServerName(name.clone()));
-            let label = store
-                .agent_display_name(&project::ExternalAgentServerName(name.clone()))
-                .unwrap_or_else(|| self.selected_agent.label());
-            (icon, label)
-        } else {
-            (None, self.selected_agent.label())
-        };
-
-        let is_loading = self
-            .active_thread_view()
-            .map(|tv| tv.read(cx).is_loading())
-            .unwrap_or(false);
-
-        let has_custom_icon = custom_icon.is_some();
-        let selected_agent = div()
-            .id("selected_agent_icon")
-            .when_some(custom_icon, |this, icon_path| {
-                this.px_1()
-                    .child(ui::Icon::from_external_svg(icon_path).color(Color::Muted))
-            })
-            .when(!has_custom_icon, |this| {
-                this.when_some(self.selected_agent.icon(), |this, icon| {
-                    this.px_1().child(ui::Icon::new(icon).color(Color::Muted))
-                })
-            })
-            .tooltip(move |_, cx| {
-                ui::Tooltip::with_meta(label.clone(), None, "Selected Agent", cx)
-            });
-
-        if is_loading {
-            selected_agent
-                .with_animation(
-                    "pulsating-icon",
-                    gpui::Animation::new(std::time::Duration::from_secs(1))
-                        .repeat()
-                        .with_easing(gpui::pulsating_between(0.2, 0.6)),
-                    |icon, delta| icon.opacity(delta),
-                )
-                .into_any_element()
-        } else {
-            selected_agent.into_any_element()
-        }
-    }
-
     fn render_title_view(&self, _window: &mut Window, cx: &Context<Self>) -> gpui::AnyElement {
         const LOADING_SUMMARY_PLACEHOLDER: &str = "Loading Summary…";
 
@@ -1057,22 +1014,18 @@ let panel_type = AgentSettings::get_global(cx).default_view;
     }
 
     pub fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
+        if !self.should_show_toolbar() {
+            return div().id("agent-toolbar").into_any_element();
+        }
+
         let left_section = h_flex()
             .size_full()
             .gap_2()
-            .child(match &self.active_view {
-                ActiveView::History { .. } | ActiveView::Configuration => {
-                    self.render_toolbar_back_button(cx).into_any_element()
-                }
-                _ => self.render_selected_agent_icon(cx),
-            })
+            .child(self.render_toolbar_back_button(cx))
             .child(self.render_title_view(window, cx));
 
-        // Note: New Thread, History, and Settings buttons have moved to the tab bar
-        // The right section is now empty but kept for potential future use
-        let right_section = h_flex().flex_none().gap_2().px_2();
-
         h_flex()
+            .id("agent-toolbar")
             .h_10()
             .w_full()
             .flex_none()
@@ -1080,7 +1033,6 @@ let panel_type = AgentSettings::get_global(cx).default_view;
             .border_b_1()
             .border_color(cx.theme().colors().border)
             .child(left_section)
-            .child(right_section)
             .into_any_element()
     }
 
