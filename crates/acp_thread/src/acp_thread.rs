@@ -3,7 +3,12 @@ mod diff;
 mod mention;
 mod terminal;
 
-use agent_settings::AgentSettings;
+use agent_settings::{AgentSettings, SUMMARIZE_THREAD_PROMPT};
+use cloud_llm_client::CompletionIntent;
+use language_model::{
+    LanguageModelCompletionEvent, LanguageModelRegistry, LanguageModelRequest,
+    LanguageModelRequestMessage, Role,
+};
 
 /// Key used in ACP ToolCall meta to store the tool's programmatic name.
 /// This is a workaround since ACP's ToolCall doesn't have a dedicated name field.
@@ -964,6 +969,7 @@ pub struct AcpThread {
     terminals: HashMap<acp::TerminalId, Entity<Terminal>>,
     pending_terminal_output: HashMap<acp::TerminalId, Vec<Vec<u8>>>,
     pending_terminal_exit: HashMap<acp::TerminalId, acp::TerminalExitStatus>,
+    pending_title_generation: Option<Task<()>>,
 }
 
 impl From<&AcpThread> for ActionLogTelemetry {
@@ -1195,6 +1201,7 @@ impl AcpThread {
             terminals: HashMap::default(),
             pending_terminal_output: HashMap::default(),
             pending_terminal_exit: HashMap::default(),
+            pending_title_generation: None,
         }
     }
 
@@ -1447,6 +1454,7 @@ impl AcpThread {
     }
 
     pub fn set_title(&mut self, title: SharedString, cx: &mut Context<Self>) -> Task<Result<()>> {
+        self.pending_title_generation = None;
         if title != self.title {
             self.title = title.clone();
             cx.emit(AcpThreadEvent::TitleUpdated);
@@ -1455,6 +1463,109 @@ impl AcpThread {
             }
         }
         Task::ready(Ok(()))
+    }
+
+    pub fn is_generating_title(&self) -> bool {
+        self.pending_title_generation.is_some()
+    }
+
+    pub fn generate_title(&mut self, cx: &mut Context<Self>) {
+        if self.pending_title_generation.is_some() {
+            return;
+        }
+
+        let messages = self.messages_for_summarization(cx);
+        if messages.is_empty() {
+            return;
+        }
+
+        let model = LanguageModelRegistry::global(cx).update(cx, |registry, _cx| {
+            registry
+                .thread_summary_model()
+                .or_else(|| registry.default_model())
+                .map(|configured| configured.model)
+        });
+
+        let Some(model) = model else {
+            return;
+        };
+
+        let mut request = LanguageModelRequest {
+            intent: Some(CompletionIntent::ThreadSummarization),
+            temperature: AgentSettings::temperature_for_model(&model, cx),
+            messages,
+            ..Default::default()
+        };
+
+        request.messages.push(LanguageModelRequestMessage {
+            role: Role::User,
+            content: vec![SUMMARIZE_THREAD_PROMPT.into()],
+            cache: false,
+            reasoning_details: None,
+        });
+
+        self.pending_title_generation = Some(cx.spawn(async move |this, cx| {
+            let mut title = String::new();
+
+            let generate = async {
+                use futures::StreamExt as _;
+                let mut stream = model.stream_completion(request, cx).await?;
+                while let Some(event) = stream.next().await {
+                    let event = event?;
+                    let text = match event {
+                        LanguageModelCompletionEvent::Text(text) => text,
+                        _ => continue,
+                    };
+
+                    let mut lines = text.lines();
+                    title.extend(lines.next());
+
+                    if lines.next().is_some() {
+                        break;
+                    }
+                }
+                anyhow::Ok(())
+            };
+
+            if generate.await.is_ok() && !title.is_empty() {
+                _ = this.update(cx, |this, cx| {
+                    let _ = this.set_title(title.into(), cx);
+                });
+            }
+            _ = this.update(cx, |this, _| {
+                this.pending_title_generation = None;
+            });
+        }));
+    }
+
+    fn messages_for_summarization(&self, cx: &App) -> Vec<LanguageModelRequestMessage> {
+        let mut messages = Vec::new();
+
+        for entry in &self.entries {
+            match entry {
+                AgentThreadEntry::UserMessage(user_message) => {
+                    messages.push(LanguageModelRequestMessage {
+                        role: Role::User,
+                        content: vec![user_message.content.to_markdown(cx).into()],
+                        cache: false,
+                        reasoning_details: None,
+                    });
+                }
+                AgentThreadEntry::AssistantMessage(assistant_message) => {
+                    messages.push(LanguageModelRequestMessage {
+                        role: Role::Assistant,
+                        content: vec![assistant_message.to_markdown(cx).into()],
+                        cache: false,
+                        reasoning_details: None,
+                    });
+                }
+                AgentThreadEntry::ToolCall(_) => {
+                    // Skip tool calls for summarization
+                }
+            }
+        }
+
+        messages
     }
 
     pub fn update_token_usage(&mut self, usage: Option<TokenUsage>, cx: &mut Context<Self>) {
@@ -1973,6 +2084,14 @@ impl AcpThread {
                         // would cause the next generation to be canceled.
                         if !canceled {
                             this.send_task.take();
+
+                            // Auto-generate title if it's empty and we have entries
+                            if this.title.is_empty()
+                                && this.pending_title_generation.is_none()
+                                && !this.entries.is_empty()
+                            {
+                                this.generate_title(cx);
+                            }
                         }
 
                         // Handle refusal - distinguish between user prompt and tool call refusals

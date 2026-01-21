@@ -3,13 +3,13 @@ use std::sync::Arc;
 
 use anyhow::{Context as AnyhowContext, Result};
 use gpui::{
-    App, AsyncWindowContext, Context, Entity, EventEmitter, FocusHandle, Focusable,
-    SharedString, Subscription, Task, WeakEntity, Window, prelude::*,
+    Action, AnyElement, App, AsyncWindowContext, Context, Corner, Entity, EventEmitter,
+    FocusHandle, Focusable, SharedString, Subscription, Task, WeakEntity, Window, prelude::*,
 };
-use project::{Project, ProjectPath};
+use project::{ExternalAgentServerName, Project, ProjectPath};
 use prompt_store::PromptBuilder;
 use serde::{Deserialize, Serialize};
-use ui::{prelude::*, Color, Icon, IconName, Label};
+use ui::{prelude::*, Color, ContextMenu, ContextMenuEntry, ContextMenuItem, Icon, IconButton, IconName, IconSize, Label, PopoverMenu, Tooltip};
 use workspace::{
     AppState, Item, ItemId, ItemNavHistory, SerializableItem, Workspace, WorkspaceId,
     delete_unloaded_items,
@@ -242,12 +242,173 @@ impl Item for AgentChatView {
             .into_any_element()
     }
 
-    fn tab_icon(&self, _window: &Window, _cx: &App) -> Option<Icon> {
-        Some(Icon::new(IconName::ZedAssistant).color(Color::Muted))
+    fn tab_icon(&self, _window: &Window, cx: &App) -> Option<Icon> {
+        let content = self.content.read(cx);
+        let agent_type = &content.selected_agent;
+
+        // Check for custom agent icon first
+        if let crate::agent_chat_content::AgentType::Custom { name } = agent_type {
+            let agent_server_store = content.project.read(cx).agent_server_store().clone();
+            if let Some(icon_path) = agent_server_store
+                .read(cx)
+                .agent_icon(&ExternalAgentServerName(name.clone()))
+            {
+                return Some(Icon::from_external_svg(icon_path).color(Color::Muted));
+            }
+        }
+
+        // Use built-in icon for known agent types, or fall back to ZedAssistant
+        agent_type
+            .icon()
+            .map(|icon_name| Icon::new(icon_name).color(Color::Muted))
+            .or_else(|| Some(Icon::new(IconName::ZedAssistant).color(Color::Muted)))
     }
 
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString> {
         Some(format!("Agent: {}", self.title(cx)).into())
+    }
+
+    fn tab_bar_buttons(&self, _window: &mut Window, _cx: &mut Context<Self>) -> Vec<AnyElement> {
+        vec![PopoverMenu::new("agent-options-menu")
+            .trigger_with_tooltip(
+                IconButton::new("agent-options", IconName::Ellipsis).icon_size(IconSize::Small),
+                Tooltip::text("Agent Options"),
+            )
+            .anchor(Corner::TopRight)
+            .menu(move |window, cx| {
+                Some(ContextMenu::build(window, cx, |menu, _, _| {
+                    menu.action("History", crate::OpenHistory.boxed_clone())
+                        .action("Settings", zed_actions::agent::OpenSettings.boxed_clone())
+                }))
+            })
+            .into_any_element()]
+    }
+
+    fn new_item_menu_entries(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Box<dyn FnOnce(Entity<ContextMenu>, &mut Window, &mut App) -> Entity<ContextMenu>>>
+    {
+        let content = self.content.downgrade();
+        Some(Box::new(move |menu, _window, cx| {
+            menu.update(cx, |menu, _cx| {
+                menu.push_item(ContextMenuItem::Header("New Thread".into()));
+                menu.push_item(ContextMenuItem::Entry(
+                    ContextMenuEntry::new("Zed Agent")
+                        .action(crate::NewThread.boxed_clone())
+                        .handler({
+                            let content = content.clone();
+                            move |window, cx| {
+                                if let Some(content) = content.upgrade() {
+                                    content.update(cx, |content, cx| {
+                                        content.external_thread(
+                                            Some(crate::ExternalAgent::NativeAgent),
+                                            None,
+                                            None,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                        }),
+                ));
+                menu.push_item(ContextMenuItem::Entry(
+                    ContextMenuEntry::new("Text Thread")
+                        .action(crate::NewTextThread.boxed_clone())
+                        .handler({
+                            let content = content.clone();
+                            move |window, cx| {
+                                if let Some(content) = content.upgrade() {
+                                    content.update(cx, |content, cx| {
+                                        content.new_text_thread(window, cx);
+                                    });
+                                }
+                            }
+                        }),
+                ));
+                menu.push_item(ContextMenuItem::Separator);
+                menu.push_item(ContextMenuItem::Header("External Agents".into()));
+                menu.push_item(ContextMenuItem::Entry(
+                    ContextMenuEntry::new("Claude Code")
+                        .action(
+                            crate::NewExternalAgentThread {
+                                agent: Some(crate::ExternalAgent::ClaudeCode),
+                            }
+                            .boxed_clone(),
+                        )
+                        .handler({
+                            let content = content.clone();
+                            move |window, cx| {
+                                if let Some(content) = content.upgrade() {
+                                    content.update(cx, |content, cx| {
+                                        content.external_thread(
+                                            Some(crate::ExternalAgent::ClaudeCode),
+                                            None,
+                                            None,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                        }),
+                ));
+                menu.push_item(ContextMenuItem::Entry(
+                    ContextMenuEntry::new("Gemini CLI")
+                        .action(
+                            crate::NewExternalAgentThread {
+                                agent: Some(crate::ExternalAgent::Gemini),
+                            }
+                            .boxed_clone(),
+                        )
+                        .handler({
+                            let content = content.clone();
+                            move |window, cx| {
+                                if let Some(content) = content.upgrade() {
+                                    content.update(cx, |content, cx| {
+                                        content.external_thread(
+                                            Some(crate::ExternalAgent::Gemini),
+                                            None,
+                                            None,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                        }),
+                ));
+                menu.push_item(ContextMenuItem::Entry(
+                    ContextMenuEntry::new("Codex CLI")
+                        .action(
+                            crate::NewExternalAgentThread {
+                                agent: Some(crate::ExternalAgent::Codex),
+                            }
+                            .boxed_clone(),
+                        )
+                        .handler({
+                            let content = content.clone();
+                            move |window, cx| {
+                                if let Some(content) = content.upgrade() {
+                                    content.update(cx, |content, cx| {
+                                        content.external_thread(
+                                            Some(crate::ExternalAgent::Codex),
+                                            None,
+                                            None,
+                                            window,
+                                            cx,
+                                        );
+                                    });
+                                }
+                            }
+                        }),
+                ));
+                menu.push_item(ContextMenuItem::Separator);
+            });
+            menu
+        }))
     }
 
     fn to_item_events(event: &Self::Event, mut f: impl FnMut(ItemEvent)) {
@@ -368,7 +529,7 @@ impl SerializableItem for AgentChatView {
         _window: &mut Window,
         _cx: &mut App,
     ) -> Task<Result<Entity<Self>>> {
-        let workspace = _workspace.clone();
+        let workspace = _workspace;
         let workspace_id = _workspace_id;
         let item_id = _item_id;
         _window.spawn(_cx, async move |cx| {

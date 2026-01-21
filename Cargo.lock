@@ -13,6 +13,7 @@ dependencies = [
  "base64 0.22.1",
  "buffer_diff",
  "chrono",
+ "cloud_llm_client",
  "collections",
  "editor",
  "env_logger 0.11.8",

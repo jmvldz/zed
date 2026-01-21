@@ -6776,8 +6776,11 @@ impl AcpThreadView {
             return;
         }
 
-        // TODO: Change this once we have title summarization for external agents.
-        let title = self.agent.name();
+        let title = self
+            .thread()
+            .map(|t| t.read(cx).title())
+            .filter(|t| !t.is_empty())
+            .unwrap_or_else(|| self.agent.name());
 
         match settings.notify_when_agent_waiting {
             NotifyWhenAgentWaiting::PrimaryScreen => {

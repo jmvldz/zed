@@ -4074,6 +4074,12 @@ fn default_render_tab_bar_buttons(
         Some(_) => (false, pane.items_len() > 1),
         None => (false, false),
     };
+    // Get custom menu entries from the active item (if any)
+    let custom_menu_entries = std::cell::RefCell::new(
+        pane.active_item()
+            .and_then(|item| item.new_item_menu_entries(window, cx)),
+    );
+
     // Ideally we would return a vec of elements here to pass directly to the [TabBar]'s
     // `end_slot`, but due to needing a view here that isn't possible.
     let right_children = h_flex()
@@ -4088,7 +4094,7 @@ fn default_render_tab_bar_buttons(
                 .anchor(Corner::TopRight)
                 .with_handle(pane.new_item_context_menu_handle.clone())
                 .menu(move |window, cx| {
-                    Some(ContextMenu::build(window, cx, |menu, _, _| {
+                    let menu = ContextMenu::build(window, cx, |menu, _, _| {
                         menu.action("New File", NewFile.boxed_clone())
                             .action("Open File", ToggleFileFinder::default().boxed_clone())
                             .separator()
@@ -4104,8 +4110,22 @@ fn default_render_tab_bar_buttons(
                             .action("Search Symbols", ToggleProjectSymbols.boxed_clone())
                             .separator()
                             .action("New Terminal", NewTerminal::default().boxed_clone())
-                    }))
+                    });
+                    // Apply custom entries from active item at the beginning of the menu
+                    let menu = if let Some(custom_entries) = custom_menu_entries.borrow_mut().take()
+                    {
+                        custom_entries(menu, window, cx)
+                    } else {
+                        menu
+                    };
+                    Some(menu)
                 }),
+        )
+        // Insert any custom buttons from the active item
+        .children(
+            pane.active_item()
+                .map(|item| item.tab_bar_buttons(window, cx))
+                .unwrap_or_default(),
         )
         .child(
             PopoverMenu::new("pane-tab-bar-split")

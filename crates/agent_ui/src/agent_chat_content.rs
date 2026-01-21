@@ -10,14 +10,14 @@ use db::kvp::KEY_VALUE_STORE;
 use editor::Editor;
 use fs::Fs;
 use gpui::{
-    AnimationExt, App, AsyncWindowContext, DismissEvent, Entity, EventEmitter,
-    Focusable, Subscription, Task, WeakEntity, Window, prelude::*,
+    AnimationExt, App, AsyncWindowContext, Entity, EventEmitter, Focusable, Subscription, Task,
+    WeakEntity, Window, prelude::*,
 };
 use language::LanguageRegistry;
 use project::Project;
 use prompt_store::{PromptBuilder, PromptStore};
 use serde::{Deserialize, Serialize};
-use ui::{Color, ContextMenu, Label, PopoverMenuHandle, prelude::*};
+use ui::{Color, Label, prelude::*};
 use util::ResultExt as _;
 use workspace::Workspace;
 
@@ -34,9 +34,6 @@ pub enum HistoryKind {
     AgentThreads,
     TextThreads,
 }
-
-const RECENTLY_UPDATED_MENU_LIMIT: usize = 6;
-const DEFAULT_THREAD_TITLE: &str = "New Thread";
 
 pub enum ActiveView {
     ExternalAgentThread {
@@ -186,10 +183,6 @@ pub struct AgentChatContent {
     pub(crate) configuration_subscription: Option<Subscription>,
     pub(crate) active_view: ActiveView,
     pub(crate) previous_view: Option<ActiveView>,
-    pub(crate) new_thread_menu_handle: PopoverMenuHandle<ContextMenu>,
-    pub(crate) agent_panel_menu_handle: PopoverMenuHandle<ContextMenu>,
-    pub(crate) agent_navigation_menu_handle: PopoverMenuHandle<ContextMenu>,
-    pub(crate) agent_navigation_menu: Option<Entity<ContextMenu>>,
     pub(crate) _extension_subscription: Option<Subscription>,
     pub(crate) selected_agent: AgentType,
 }
@@ -286,48 +279,6 @@ impl AgentChatContent {
             cx,
         );
 
-        let weak_content = cx.entity().downgrade();
-        window.defer(cx, move |window, cx| {
-            let content = weak_content.clone();
-            let agent_navigation_menu =
-                ContextMenu::build_persistent(window, cx, move |mut menu, _window, cx| {
-                    if let Some(content) = content.upgrade() {
-                        if let Some(kind) = content.read(cx).history_kind_for_selected_agent(cx) {
-                            menu = Self::populate_recently_updated_menu_section(
-                                menu,
-                                content,
-                                kind,
-                                cx,
-                            );
-                            menu = menu.action("View All", Box::new(crate::OpenHistory));
-                        }
-                    }
-
-                    menu = menu
-                        .fixed_width(px(320.).into())
-                        .keep_open_on_confirm(false)
-                        .key_context("NavigationMenu");
-
-                    menu
-                });
-
-            weak_content
-                .update(cx, |content, cx| {
-                    cx.subscribe_in(
-                        &agent_navigation_menu,
-                        window,
-                        |_, menu, _: &DismissEvent, _window, cx| {
-                            menu.update(cx, |menu, _| {
-                                menu.clear_selected();
-                            });
-                        },
-                    )
-                    .detach();
-                    content.agent_navigation_menu = Some(agent_navigation_menu);
-                })
-                .ok();
-        });
-
         // Subscribe to extension events to sync agent servers when extensions change
         let extension_subscription = if let Some(extension_events) =
             extension::ExtensionEvents::try_global(cx)
@@ -356,10 +307,6 @@ impl AgentChatContent {
             configuration_subscription: None,
             context_server_registry,
             previous_view: None,
-            new_thread_menu_handle: PopoverMenuHandle::default(),
-            agent_panel_menu_handle: PopoverMenuHandle::default(),
-            agent_navigation_menu_handle: PopoverMenuHandle::default(),
-            agent_navigation_menu: None,
             _extension_subscription: extension_subscription,
             acp_history,
             text_thread_history,
@@ -625,101 +572,6 @@ impl AgentChatContent {
             AgentType::Custom { name } => Some(ExternalAgent::Custom { name: name.clone() }),
             AgentType::TextThread => None,
         }
-    }
-
-    fn populate_recently_updated_menu_section(
-        mut menu: ContextMenu,
-        content: Entity<Self>,
-        kind: HistoryKind,
-        cx: &mut Context<ContextMenu>,
-    ) -> ContextMenu {
-        match kind {
-            HistoryKind::AgentThreads => {
-                let entries = content
-                    .read(cx)
-                    .acp_history
-                    .read(cx)
-                    .sessions()
-                    .iter()
-                    .take(RECENTLY_UPDATED_MENU_LIMIT)
-                    .cloned()
-                    .collect::<Vec<_>>();
-
-                if entries.is_empty() {
-                    return menu;
-                }
-
-                menu = menu.header("Recently Updated");
-
-                for entry in entries {
-                    let title = entry
-                        .title
-                        .as_ref()
-                        .filter(|title| !title.is_empty())
-                        .cloned()
-                        .unwrap_or_else(|| SharedString::new_static(DEFAULT_THREAD_TITLE));
-
-                    menu = menu.entry(title, None, {
-                        let content = content.downgrade();
-                        let entry = entry.clone();
-                        move |window, cx| {
-                            let entry = entry.clone();
-                            content
-                                .update(cx, move |this, cx| {
-                                    this.external_thread(
-                                        Some(ExternalAgent::NativeAgent),
-                                        Some(entry.clone()),
-                                        None,
-                                        window,
-                                        cx,
-                                    );
-                                })
-                                .ok();
-                        }
-                    });
-                }
-            }
-            HistoryKind::TextThreads => {
-                let entries = content
-                    .read(cx)
-                    .text_thread_store
-                    .read(cx)
-                    .ordered_text_threads()
-                    .take(RECENTLY_UPDATED_MENU_LIMIT)
-                    .cloned()
-                    .collect::<Vec<_>>();
-
-                if entries.is_empty() {
-                    return menu;
-                }
-
-                menu = menu.header("Recently Updated");
-
-                for entry in entries {
-                    let title = if entry.title.is_empty() {
-                        SharedString::new_static(DEFAULT_THREAD_TITLE)
-                    } else {
-                        entry.title.clone()
-                    };
-
-                    menu = menu.entry(title, None, {
-                        let content = content.downgrade();
-                        let entry = entry.clone();
-                        move |window, cx| {
-                            let path = entry.path.clone();
-                            content
-                                .update(cx, move |this, cx| {
-                                    this.open_saved_text_thread(path.clone(), window, cx)
-                                        .detach_and_log_err(cx);
-                                })
-                                .ok();
-                        }
-                    });
-                }
-            }
-        }
-
-        menu.separator()
     }
 
     fn set_active_view(
@@ -1179,391 +1031,7 @@ impl AgentChatContent {
             .into_any()
     }
 
-    fn render_new_thread_menu(
-        &mut self,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        use project::agent_server_store::{CLAUDE_CODE_NAME, CODEX_NAME, GEMINI_NAME};
-
-        let agent_server_store = self.project.read(cx).agent_server_store().clone();
-        let is_via_collab = self.project.read(cx).is_via_collab();
-        let selected_agent = self.selected_agent.clone();
-        let is_agent_selected = move |agent_type: AgentType| selected_agent == agent_type;
-
-        let active_thread = match &self.active_view {
-            ActiveView::ExternalAgentThread { thread_view } => {
-                thread_view.read(cx).as_native_thread(cx)
-            }
-            _ => None,
-        };
-
-        ui::PopoverMenu::new("new_thread_menu")
-            .trigger_with_tooltip(
-                ui::IconButton::new("new_thread_menu_btn", ui::IconName::Plus)
-                    .icon_size(ui::IconSize::Small),
-                ui::Tooltip::text("New Thread…"),
-            )
-            .anchor(gpui::Corner::TopRight)
-            .with_handle(self.new_thread_menu_handle.clone())
-            .menu(move |window, cx| {
-                telemetry::event!("New Thread Clicked");
-
-                let active_thread = active_thread.clone();
-                Some(ContextMenu::build(window, cx, |mut menu, _window, cx| {
-                    menu = menu
-                        .when_some(active_thread, |this, active_thread| {
-                            let thread = active_thread.read(cx);
-
-                            if !thread.is_empty() {
-                                let session_id = thread.id().clone();
-                                this.item(
-                                    ui::ContextMenuEntry::new("New From Summary")
-                                        .icon(ui::IconName::ThreadFromSummary)
-                                        .icon_color(Color::Muted)
-                                        .handler(move |window, cx| {
-                                            window.dispatch_action(
-                                                Box::new(crate::NewNativeAgentThreadFromSummary {
-                                                    from_session_id: session_id.clone(),
-                                                }),
-                                                cx,
-                                            );
-                                        }),
-                                )
-                            } else {
-                                this
-                            }
-                        })
-                        .item(
-                            ui::ContextMenuEntry::new("Zed Agent")
-                                .when(is_agent_selected(AgentType::NativeAgent) | is_agent_selected(AgentType::TextThread), |this| {
-                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
-                                })
-                                .icon(ui::IconName::ZedAgent)
-                                .icon_color(Color::Muted)
-                                .handler(move |window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(crate::NewExternalAgentThread {
-                                            agent: Some(crate::ExternalAgent::NativeAgent),
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                        )
-                        .item(
-                            ui::ContextMenuEntry::new("Text Thread")
-                                .action(Box::new(crate::NewTextThread))
-                                .icon(ui::IconName::TextThread)
-                                .icon_color(Color::Muted)
-                                .handler(move |window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(crate::NewTextThread),
-                                        cx,
-                                    );
-                                }),
-                        )
-                        .separator()
-                        .header("External Agents")
-                        .item(
-                            ui::ContextMenuEntry::new("Claude Code")
-                                .when(is_agent_selected(AgentType::ClaudeCode), |this| {
-                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
-                                })
-                                .icon(ui::IconName::AiClaude)
-                                .disabled(is_via_collab)
-                                .icon_color(Color::Muted)
-                                .handler(move |window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(crate::NewExternalAgentThread {
-                                            agent: Some(crate::ExternalAgent::ClaudeCode),
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                        )
-                        .item(
-                            ui::ContextMenuEntry::new("Codex CLI")
-                                .when(is_agent_selected(AgentType::Codex), |this| {
-                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
-                                })
-                                .icon(ui::IconName::AiOpenAi)
-                                .disabled(is_via_collab)
-                                .icon_color(Color::Muted)
-                                .handler(move |window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(crate::NewExternalAgentThread {
-                                            agent: Some(crate::ExternalAgent::Codex),
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                        )
-                        .item(
-                            ui::ContextMenuEntry::new("Gemini CLI")
-                                .when(is_agent_selected(AgentType::Gemini), |this| {
-                                    this.action(Box::new(crate::NewExternalAgentThread { agent: None }))
-                                })
-                                .icon(ui::IconName::AiGemini)
-                                .icon_color(Color::Muted)
-                                .disabled(is_via_collab)
-                                .handler(move |window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(crate::NewExternalAgentThread {
-                                            agent: Some(crate::ExternalAgent::Gemini),
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                        );
-
-                    // Add custom agent servers
-                    let agent_server_store = agent_server_store.read(cx);
-                    let agent_names = agent_server_store
-                        .external_agents()
-                        .filter(|name| {
-                            name.0 != GEMINI_NAME
-                                && name.0 != CLAUDE_CODE_NAME
-                                && name.0 != CODEX_NAME
-                        })
-                        .cloned()
-                        .collect::<Vec<_>>();
-
-                    for agent_name in agent_names {
-                        let icon_path = agent_server_store.agent_icon(&agent_name);
-                        let display_name = agent_server_store
-                            .agent_display_name(&agent_name)
-                            .unwrap_or_else(|| agent_name.0.clone());
-
-                        let mut entry = ui::ContextMenuEntry::new(display_name);
-
-                        if let Some(icon_path) = icon_path {
-                            entry = entry.custom_icon_svg(icon_path);
-                        } else {
-                            entry = entry.icon(ui::IconName::Sparkle);
-                        }
-
-                        entry = entry.icon_color(Color::Muted);
-
-                        let agent_name_for_handler = agent_name.clone();
-                        entry = entry.handler(move |window, cx| {
-                            window.dispatch_action(
-                                Box::new(crate::NewExternalAgentThread {
-                                    agent: Some(crate::ExternalAgent::Custom {
-                                        name: agent_name_for_handler.0.clone(),
-                                    }),
-                                }),
-                                cx,
-                            );
-                        });
-
-                        menu = menu.item(entry);
-                    }
-
-                    menu = menu
-                        .separator()
-                        .item(
-                            ui::ContextMenuEntry::new("Add More Agents")
-                                .icon(ui::IconName::Plus)
-                                .icon_color(Color::Muted)
-                                .handler(move |window, cx| {
-                                    window.dispatch_action(
-                                        Box::new(zed_actions::Extensions {
-                                            category_filter: Some(
-                                                zed_actions::ExtensionCategoryFilter::AgentServers,
-                                            ),
-                                            id: None,
-                                        }),
-                                        cx,
-                                    );
-                                }),
-                        );
-
-                    menu
-                }))
-            })
-    }
-
-    fn render_panel_options_menu(
-        &self,
-        _window: &mut Window,
-        cx: &Context<Self>,
-    ) -> impl IntoElement {
-        let usage: Option<client::RequestUsage> = None;
-        let account_url = client::zed_urls::account_url(cx);
-
-        let selected_agent = self.selected_agent.clone();
-
-        let text_thread_view = match &self.active_view {
-            ActiveView::TextThread {
-                text_thread_editor, ..
-            } => Some(text_thread_editor.clone()),
-            _ => None,
-        };
-        let text_thread_with_messages = match &self.active_view {
-            ActiveView::TextThread {
-                text_thread_editor, ..
-            } => text_thread_editor
-                .read(cx)
-                .text_thread()
-                .read(cx)
-                .messages(cx)
-                .any(|message| message.role == language_model::Role::Assistant),
-            _ => false,
-        };
-
-        let thread_view = match &self.active_view {
-            ActiveView::ExternalAgentThread { thread_view } => Some(thread_view.clone()),
-            _ => None,
-        };
-        let thread_with_messages = match &self.active_view {
-            ActiveView::ExternalAgentThread { thread_view } => {
-                thread_view.read(cx).has_user_submitted_prompt(cx)
-            }
-            _ => false,
-        };
-
-        ui::PopoverMenu::new("agent-options-menu")
-            .trigger_with_tooltip(
-                ui::IconButton::new("agent-options-menu", ui::IconName::Ellipsis)
-                    .icon_size(ui::IconSize::Small),
-                ui::Tooltip::text("Toggle Agent Menu"),
-            )
-            .anchor(gpui::Corner::TopRight)
-            .with_handle(self.agent_panel_menu_handle.clone())
-            .menu(move |_window, cx| {
-                Some(ContextMenu::build(_window, cx, |mut menu, _window, _| {
-                    if let Some(usage) = usage {
-                        menu = menu
-                            .header_with_link("Prompt Usage", "Manage", account_url.clone())
-                            .custom_entry(
-                                move |_window, cx| {
-                                    use cloud_llm_client::UsageLimit;
-
-                                    let used_percentage = match usage.limit {
-                                        UsageLimit::Limited(limit) => {
-                                            Some((usage.amount as f32 / limit as f32) * 100.)
-                                        }
-                                        UsageLimit::Unlimited => None,
-                                    };
-
-                                    h_flex()
-                                        .flex_1()
-                                        .gap_1p5()
-                                        .children(used_percentage.map(|percent| {
-                                            ui::ProgressBar::new("usage", percent, 100., cx)
-                                        }))
-                                        .child(
-                                            Label::new(match usage.limit {
-                                                UsageLimit::Limited(limit) => {
-                                                    format!("{} / {limit}", usage.amount)
-                                                }
-                                                UsageLimit::Unlimited => {
-                                                    format!("{} / ∞", usage.amount)
-                                                }
-                                            })
-                                            .size(ui::LabelSize::Small)
-                                            .color(Color::Muted),
-                                        )
-                                        .into_any_element()
-                                },
-                                move |_, cx| cx.open_url(&client::zed_urls::account_url(cx)),
-                            )
-                            .separator()
-                    }
-
-                    if thread_with_messages | text_thread_with_messages {
-                        menu = menu.header("Current Thread");
-
-                        if let Some(text_thread_view) = text_thread_view.as_ref() {
-                            menu = menu
-                                .entry("Regenerate Thread Title", None, {
-                                    let text_thread_view = text_thread_view.clone();
-                                    move |_, cx| {
-                                        text_thread_view.update(cx, |editor, cx| {
-                                            editor.regenerate_summary(cx);
-                                        });
-                                    }
-                                })
-                                .separator();
-                        }
-
-                        if let Some(thread_view) = thread_view.as_ref() {
-                            menu = menu
-                                .entry("Regenerate Thread Title", None, {
-                                    let thread_view = thread_view.clone();
-                                    move |_, cx| {
-                                        if let Some(native_thread) =
-                                            thread_view.read(cx).as_native_thread(cx)
-                                        {
-                                            native_thread.update(cx, |thread, cx| {
-                                                thread.generate_title(cx);
-                                            });
-                                        }
-                                    }
-                                })
-                                .separator();
-                        }
-                    }
-
-                    menu = menu
-                        .header("MCP Servers")
-                        .action(
-                            "View Server Extensions",
-                            Box::new(zed_actions::Extensions {
-                                category_filter: Some(
-                                    zed_actions::ExtensionCategoryFilter::ContextServers,
-                                ),
-                                id: None,
-                            }),
-                        )
-                        .action("Add Custom Server…", Box::new(crate::AddContextServer))
-                        .separator()
-                        .action("Rules", Box::new(zed_actions::assistant::OpenRulesLibrary::default()))
-                        .action("Profiles", Box::new(crate::ManageProfiles::default()))
-                        .action("Settings", Box::new(zed_actions::agent::OpenSettings));
-
-                    if selected_agent == AgentType::Gemini {
-                        menu = menu.action("Reauthenticate", Box::new(zed_actions::agent::ReauthenticateAgent))
-                    }
-
-                    menu
-                }))
-            })
-    }
-
-    fn render_recent_entries_menu(
-        &self,
-        icon: ui::IconName,
-        corner: gpui::Corner,
-        _cx: &Context<Self>,
-    ) -> impl IntoElement {
-        ui::PopoverMenu::new("agent-nav-menu")
-            .trigger_with_tooltip(
-                ui::IconButton::new("agent-nav-menu", icon).icon_size(ui::IconSize::Small),
-                ui::Tooltip::text("Toggle Recently Updated Threads"),
-            )
-            .anchor(corner)
-            .with_handle(self.agent_navigation_menu_handle.clone())
-            .menu({
-                let menu = self.agent_navigation_menu.clone();
-                move |_window, cx| {
-                    telemetry::event!("View Thread History Clicked");
-
-                    if let Some(menu) = menu.as_ref() {
-                        menu.update(cx, |_, cx| {
-                            cx.defer_in(_window, |menu, window, cx| {
-                                menu.rebuild(window, cx);
-                            });
-                        })
-                    }
-                    menu.clone()
-                }
-            })
-    }
-
     pub fn render_toolbar(&mut self, window: &mut Window, cx: &mut Context<Self>) -> gpui::AnyElement {
-        let show_history_menu = self.history_kind_for_selected_agent(cx).is_some();
-
         let left_section = h_flex()
             .size_full()
             .gap_2()
@@ -1575,19 +1043,9 @@ impl AgentChatContent {
             })
             .child(self.render_title_view(window, cx));
 
-        let right_section = h_flex()
-            .flex_none()
-            .gap_2()
-            .px_2()
-            .child(self.render_new_thread_menu(window, cx))
-            .when(show_history_menu, |this| {
-                this.child(self.render_recent_entries_menu(
-                    ui::IconName::MenuAltTemp,
-                    gpui::Corner::TopRight,
-                    cx,
-                ))
-            })
-            .child(self.render_panel_options_menu(window, cx));
+        // Note: New Thread, History, and Settings buttons have moved to the tab bar
+        // The right section is now empty but kept for potential future use
+        let right_section = h_flex().flex_none().gap_2().px_2();
 
         h_flex()
             .h_10()
