@@ -3979,6 +3979,69 @@ async fn test_agent_chat_filtering(cx: &mut TestAppContext) {
 
 ---
 
+## Phase 10: Single-Window Enforcement
+
+**Goal:** Enforce the single-window constraint for the MVP and remove UI affordances
+that would create or suggest multiple windows.
+
+### 10.1 Central Enforcement in Workspace Open Paths
+
+**File:** `crates/workspace/src/workspace.rs` (modify)
+
+- In `open_paths` and `open_new`, if single-window mode is enabled:
+  - Reuse an existing `Workspace` window when available.
+  - Ignore `open_new_workspace` and `replace_window`.
+  - Only create a new window if no workspace window exists.
+
+### 10.2 Disable New Window Actions
+
+**File:** `crates/zed/src/zed.rs` (modify)
+
+- `NewWindow` action handler should focus the existing workspace window (or no-op)
+  instead of creating a new one when single-window mode is enabled.
+
+### 10.3 Disable System Window Tab Actions (macOS)
+
+**File:** `crates/title_bar/src/system_window_tabs.rs` (modify)
+
+- Gate `MoveTabToNewWindow` (and related merge/move actions) to no-op when
+  single-window mode is enabled.
+
+### 10.4 Hide or Disable UI Affordances
+
+**File:** `crates/zed/src/zed/app_menus.rs` (modify)
+
+- Remove or disable “New Window” in the File menu when single-window mode is enabled.
+
+**File:** `crates/recent_projects/src/recent_projects.rs` (modify)
+
+- Hide “Open Project in New Window” secondary action when single-window mode is enabled.
+
+**File:** `crates/git_ui/src/worktree_picker.rs` (modify)
+
+- Remove or relabel “Open in New Window” to reuse the current window when
+  single-window mode is enabled.
+
+### 10.5 CLI/IPC Reuse
+
+**File:** `crates/zed/src/zed/open_listener.rs` (modify)
+
+- Ignore `open_new_workspace` requests from CLI/IPC and always reuse the existing
+  window (falling back to create a new one only if no workspace window exists).
+
+### 10.6 Settings or Flag Wiring
+
+- Use the same feature flag or setting that enables multi-workspace mode to also
+  toggle single-window enforcement.
+
+**Acceptance Criteria for Phase 10:**
+- [ ] “New Window” action does not create additional windows when enabled.
+- [ ] CLI `--new` or `open_new_workspace` requests reuse the existing window.
+- [ ] UI does not show “Open in New Window” affordances.
+- [ ] Attempting to move tabs to a new window is a no-op.
+
+---
+
 ## Migration Path
 
 ### For Existing Users
@@ -4009,6 +4072,7 @@ async fn test_agent_chat_filtering(cx: &mut TestAppContext) {
 | 7 | - | `settings_content/workspace.rs`, `flags.rs`, `default.json` |
 | 8 | - | Various polish files |
 | 9 | `*_tests.rs` | - |
+| 10 | - | `workspace.rs`, `zed.rs`, `system_window_tabs.rs`, `app_menus.rs`, `recent_projects.rs`, `worktree_picker.rs`, `open_listener.rs` |
 
 ---
 
@@ -4025,6 +4089,7 @@ async fn test_agent_chat_filtering(cx: &mut TestAppContext) {
 | 7 | Low | Phase 1, 2 |
 | 8 | Medium | All previous |
 | 9 | Medium | All previous |
+| 10 | Low | Phases 1, 2, 7 |
 
 **Critical Path:** Phase 1 → Phase 3 → Phase 4 (workspace switching is the hardest part)
 
