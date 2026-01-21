@@ -522,7 +522,7 @@ mod tests {
             inline_alternatives: vec![],
             favorite_models: vec![],
             default_profile: AgentProfileId::default(),
-            default_view: DefaultAgentView::ClaudeCode,
+            default_view: DefaultAgentView::Thread,
             profiles: Default::default(),
             always_allow_tool_actions: false,
             notify_when_agent_waiting: NotifyWhenAgentWaiting::default(),

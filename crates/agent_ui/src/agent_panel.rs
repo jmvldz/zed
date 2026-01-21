@@ -9,7 +9,9 @@ use project::{
     agent_server_store::{CLAUDE_CODE_NAME, CODEX_NAME, GEMINI_NAME},
 };
 use serde::{Deserialize, Serialize};
-use settings::{LanguageModelProviderSetting, LanguageModelSelection};
+use settings::{
+    DefaultAgentView as DefaultView, LanguageModelProviderSetting, LanguageModelSelection,
+};
 
 use zed_actions::agent::{OpenClaudeCodeOnboardingModal, ReauthenticateAgent};
 
@@ -297,8 +299,9 @@ impl ActiveView {
         }
     }
 
-    fn claude_code(
+fn native_agent(
         fs: Arc<dyn Fs>,
+        prompt_store: Option<Entity<PromptStore>>,
         thread_store: Entity<ThreadStore>,
         project: Entity<Project>,
         workspace: WeakEntity<Workspace>,
@@ -308,13 +311,13 @@ impl ActiveView {
     ) -> Self {
         let thread_view = cx.new(|cx| {
             crate::acp::AcpThreadView::new(
-                ExternalAgent::ClaudeCode.server(fs, thread_store.clone()),
+                ExternalAgent::NativeAgent.server(fs, thread_store.clone()),
                 None,
                 None,
                 workspace,
                 project,
                 Some(thread_store),
-                None,
+                prompt_store,
                 history,
                 false,
                 window,
@@ -567,15 +570,37 @@ impl AgentPanel {
         )
         .detach();
 
-        let active_view = ActiveView::claude_code(
-            fs.clone(),
-            thread_store.clone(),
-            project.clone(),
-            workspace.clone(),
-            acp_history.clone(),
-            window,
-            cx,
-        );
+        let panel_type = AgentSettings::get_global(cx).default_view;
+        let active_view = match panel_type {
+            DefaultView::Thread => ActiveView::native_agent(
+                fs.clone(),
+                prompt_store.clone(),
+                thread_store.clone(),
+                project.clone(),
+                workspace.clone(),
+                acp_history.clone(),
+                window,
+                cx,
+            ),
+            DefaultView::TextThread => {
+                let context = text_thread_store.update(cx, |store, cx| store.create(cx));
+                let lsp_adapter_delegate = make_lsp_adapter_delegate(&project.clone(), cx).unwrap();
+                let text_thread_editor = cx.new(|cx| {
+                    let mut editor = TextThreadEditor::for_text_thread(
+                        context,
+                        fs.clone(),
+                        workspace.clone(),
+                        project.clone(),
+                        lsp_adapter_delegate,
+                        window,
+                        cx,
+                    );
+                    editor.insert_default_prompt(window, cx);
+                    editor
+                });
+                ActiveView::text_thread(text_thread_editor, language_registry.clone(), window, cx)
+            }
+        };
 
         let weak_panel = cx.entity().downgrade();
 

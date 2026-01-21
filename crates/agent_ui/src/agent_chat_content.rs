@@ -17,7 +17,8 @@ use language::LanguageRegistry;
 use project::Project;
 use prompt_store::{PromptBuilder, PromptStore};
 use serde::{Deserialize, Serialize};
-use ui::{Color, Label, prelude::*};
+use settings::{DefaultAgentView as DefaultView, Settings};
+use ui::{Color, ContextMenu, Label, PopoverMenuHandle, prelude::*};
 use util::ResultExt as _;
 use workspace::Workspace;
 
@@ -28,6 +29,9 @@ use crate::{
     text_thread_editor::{TextThreadEditor, make_lsp_adapter_delegate},
     text_thread_history::{TextThreadHistory, TextThreadHistoryEvent},
 };
+use agent_settings::AgentSettings;
+use ai_onboarding::AgentPanelOnboarding;
+use client::UserStore;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum HistoryKind {
@@ -52,16 +56,16 @@ pub enum ActiveView {
 }
 
 impl ActiveView {
-    pub(crate) fn claude_code(
+    pub(crate) fn native_agent(
         fs: Arc<dyn Fs>,
+        prompt_store: Option<Entity<PromptStore>>,
         thread_store: Entity<ThreadStore>,
         project: Entity<Project>,
         workspace: WeakEntity<Workspace>,
-        history: Entity<AcpThreadHistory>,
         window: &mut Window,
         cx: &mut Context<AgentChatContent>,
     ) -> Self {
-        let server = ExternalAgent::ClaudeCode.server(fs, thread_store.clone());
+        let server = ExternalAgent::NativeAgent.server(fs, thread_store.clone());
         let thread_view = cx.new(|cx| {
             AcpThreadView::new(
                 server,
@@ -69,9 +73,8 @@ impl ActiveView {
                 None,
                 workspace,
                 project,
-                Some(thread_store),
-                None,
-                history,
+                thread_store.clone(),
+                prompt_store.clone(),
                 false,
                 window,
                 cx,
@@ -269,15 +272,36 @@ impl AgentChatContent {
         )
         .detach();
 
-        let active_view = ActiveView::claude_code(
-            fs.clone(),
-            thread_store.clone(),
-            project.clone(),
-            workspace_weak.clone(),
-            acp_history.clone(),
-            window,
-            cx,
-        );
+let panel_type = AgentSettings::get_global(cx).default_view;
+        let active_view = match panel_type {
+            DefaultView::Thread => ActiveView::native_agent(
+                fs.clone(),
+                prompt_store.clone(),
+                thread_store.clone(),
+                project.clone(),
+                workspace_weak.clone(),
+                window,
+                cx,
+            ),
+            DefaultView::TextThread => {
+                let context = text_thread_store.update(cx, |store, cx| store.create(cx));
+                let lsp_adapter_delegate = make_lsp_adapter_delegate(&project.clone(), cx).unwrap();
+                let text_thread_editor = cx.new(|cx| {
+                    let mut editor = TextThreadEditor::for_text_thread(
+                        context,
+                        fs.clone(),
+                        workspace_weak.clone(),
+                        project.clone(),
+                        lsp_adapter_delegate,
+                        window,
+                        cx,
+                    );
+                    editor.insert_default_prompt(window, cx);
+                    editor
+                });
+                ActiveView::text_thread(text_thread_editor, language_registry.clone(), window, cx)
+            }
+        };
 
         // Subscribe to extension events to sync agent servers when extensions change
         let extension_subscription = if let Some(extension_events) =
