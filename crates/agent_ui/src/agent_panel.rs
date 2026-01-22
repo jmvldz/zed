@@ -2793,9 +2793,6 @@ impl Render for AgentPanel {
             .on_action(cx.listener(|this, action: &NewThread, window, cx| {
                 this.new_thread(action, window, cx);
             }))
-            .on_action(cx.listener(|this, _: &OpenHistory, window, cx| {
-                this.open_history(window, cx);
-            }))
             .on_action(cx.listener(|this, _: &OpenSettings, window, cx| {
                 this.open_configuration(window, cx);
             }))
