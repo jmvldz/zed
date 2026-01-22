@@ -83,6 +83,10 @@ impl Tab {
     pub fn container_height(cx: &App) -> Pixels {
         DynamicSpacing::Base32.px(cx)
     }
+
+    pub fn start_slot_size() -> Pixels {
+        START_TAB_SLOT_SIZE
+    }
 }
 
 impl InteractiveElement for Tab {

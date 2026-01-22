@@ -181,6 +181,11 @@ impl Icon {
         self
     }
 
+    pub fn transform(mut self, transformation: Transformation) -> Self {
+        self.transformation = transformation;
+        self
+    }
+
     /// Sets a custom size for the icon, in [`Rems`].
     ///
     /// Not to be exposed outside of the `ui` crate.

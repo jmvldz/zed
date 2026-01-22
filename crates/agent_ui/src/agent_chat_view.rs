@@ -4,12 +4,13 @@ use std::sync::Arc;
 use anyhow::{Context as AnyhowContext, Result};
 use gpui::{
     Action, AnyElement, App, AsyncWindowContext, Context, Corner, Entity, EventEmitter,
-    FocusHandle, Focusable, SharedString, Subscription, Task, WeakEntity, Window, prelude::*,
+    FocusHandle, Focusable, SharedString, Subscription, Task, Transformation, WeakEntity, Window,
+    point, prelude::*,
 };
 use project::{ExternalAgentServerName, Project, ProjectPath};
 use prompt_store::PromptBuilder;
 use serde::{Deserialize, Serialize};
-use ui::{prelude::*, Color, ContextMenu, ContextMenuEntry, ContextMenuItem, Icon, IconButton, IconName, IconSize, Label, PopoverMenu, Tooltip};
+use ui::{prelude::*, Color, ContextMenu, ContextMenuEntry, ContextMenuItem, Icon, IconButton, IconName, IconSize, Label, PopoverMenu, Tab, Tooltip};
 use workspace::{
     AppState, Item, ItemId, ItemNavHistory, SerializableItem, Workspace, WorkspaceId,
     delete_unloaded_items,
@@ -242,9 +243,18 @@ impl Item for AgentChatView {
             .into_any_element()
     }
 
-    fn tab_icon(&self, _window: &Window, cx: &App) -> Option<Icon> {
+    fn tab_icon(&self, window: &Window, cx: &App) -> Option<Icon> {
         let content = self.content.read(cx);
         let agent_type = &content.selected_agent;
+        let icon_offset = {
+            let tab_padding = DynamicSpacing::Base04.px(cx);
+            let tab_gap = DynamicSpacing::Base04.rems(cx).to_pixels(window.rem_size());
+            let icon_label_gap = rems(0.375).to_pixels(window.rem_size());
+
+            (tab_padding + Tab::start_slot_size() + tab_gap - icon_label_gap) * 0.5
+        };
+        let icon_transform = Transformation::translate(point(-icon_offset, px(0.)));
+        let apply_offset = |icon: Icon| icon.transform(icon_transform);
 
         // Check for custom agent icon first
         if let crate::agent_chat_content::AgentType::Custom { name } = agent_type {
@@ -253,15 +263,21 @@ impl Item for AgentChatView {
                 .read(cx)
                 .agent_icon(&ExternalAgentServerName(name.clone()))
             {
-                return Some(Icon::from_external_svg(icon_path).color(Color::Muted));
+                return Some(apply_offset(
+                    Icon::from_external_svg(icon_path).color(Color::Muted),
+                ));
             }
         }
 
         // Use built-in icon for known agent types, or fall back to ZedAssistant
         agent_type
             .icon()
-            .map(|icon_name| Icon::new(icon_name).color(Color::Muted))
-            .or_else(|| Some(Icon::new(IconName::ZedAssistant).color(Color::Muted)))
+            .map(|icon_name| apply_offset(Icon::new(icon_name).color(Color::Muted)))
+            .or_else(|| {
+                Some(apply_offset(
+                    Icon::new(IconName::ZedAssistant).color(Color::Muted),
+                ))
+            })
     }
 
     fn tab_tooltip_text(&self, cx: &App) -> Option<SharedString> {

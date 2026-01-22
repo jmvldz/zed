@@ -2906,7 +2906,7 @@ impl Pane {
                 h_flex()
                     .id(("pane-tab-content", ix))
                     .items_center()
-                    .gap_1()
+                    .gap_1p5()
                     .children(if let Some(decorated_icon) = decorated_icon {
                         Some(decorated_icon.into_any_element())
                     } else if let Some(icon) = icon {
