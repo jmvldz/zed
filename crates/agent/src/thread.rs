@@ -1692,12 +1692,6 @@ impl Thread {
 
             this.update(cx, |this, cx| {
                 this.flush_pending_message(cx);
-                if this.title.is_none() && this.pending_title_generation.is_none() {
-                    this.generate_title(cx);
-                }
-                if this.short_title.is_none() && this.pending_short_title_generation.is_none() {
-                    this.generate_short_title(cx);
-                }
             })?;
 
             if cancelled {
@@ -1808,7 +1802,16 @@ impl Thread {
                 self.flush_pending_message(cx);
                 self.pending_message = Some(AgentMessage::default());
             }
-            Text(new_text) => self.handle_text_event(new_text, event_stream),
+            Text(new_text) => {
+                // Start title generation in parallel when first content arrives
+                if self.title.is_none() && self.pending_title_generation.is_none() {
+                    self.generate_title(cx);
+                }
+                if self.short_title.is_none() && self.pending_short_title_generation.is_none() {
+                    self.generate_short_title(cx);
+                }
+                self.handle_text_event(new_text, event_stream);
+            }
             Thinking { text, signature } => {
                 self.handle_thinking_event(text, signature, event_stream)
             }

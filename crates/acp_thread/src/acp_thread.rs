@@ -1456,6 +1456,14 @@ impl AcpThread {
                 }
             }
         } else {
+            // Start title generation in parallel when first assistant content arrives
+            if self.title.is_empty() && self.pending_title_generation.is_none() {
+                self.generate_title(cx);
+            }
+            if self.short_title.is_none() && self.pending_short_title_generation.is_none() {
+                self.generate_short_title(cx);
+            }
+
             let block = ContentBlock::new(chunk, &language_registry, path_style, cx);
             let chunk = if is_thought {
                 AssistantMessageChunk::Thought { block }
@@ -2187,22 +2195,6 @@ impl AcpThread {
                         // would cause the next generation to be canceled.
                         if !canceled {
                             this.send_task.take();
-
-                            // Auto-generate title if it's empty and we have entries
-                            if this.title.is_empty()
-                                && this.pending_title_generation.is_none()
-                                && !this.entries.is_empty()
-                            {
-                                this.generate_title(cx);
-                            }
-
-                            // Auto-generate short title for tab display
-                            if this.short_title.is_none()
-                                && this.pending_short_title_generation.is_none()
-                                && !this.entries.is_empty()
-                            {
-                                this.generate_short_title(cx);
-                            }
                         }
 
                         // Handle refusal - distinguish between user prompt and tool call refusals

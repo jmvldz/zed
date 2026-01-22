@@ -315,11 +315,12 @@ impl NativeAgent {
         let thread = thread_handle.read(cx);
         let session_id = thread.id().clone();
         let title = thread.title();
+        let short_title = thread.short_title();
         let project = thread.project.clone();
         let action_log = thread.action_log.clone();
         let prompt_capabilities_rx = thread.prompt_capabilities_rx.clone();
         let acp_thread = cx.new(|cx| {
-            acp_thread::AcpThread::new(
+            let mut acp_thread = acp_thread::AcpThread::new(
                 title,
                 connection,
                 project.clone(),
@@ -327,7 +328,11 @@ impl NativeAgent {
                 session_id.clone(),
                 prompt_capabilities_rx,
                 cx,
-            )
+            );
+            if let Some(short_title) = short_title {
+                acp_thread.set_short_title(short_title, cx);
+            }
+            acp_thread
         });
 
         let registry = LanguageModelRegistry::read_global(cx);
