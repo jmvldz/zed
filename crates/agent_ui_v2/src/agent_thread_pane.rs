@@ -144,7 +144,11 @@ impl AgentThreadPane {
         if let Some(active_thread_view) = &self.thread_view {
             let thread_view = active_thread_view.view.read(cx);
             if let Some(thread) = thread_view.thread() {
-                let title = thread.read(cx).title();
+                let thread = thread.read(cx);
+                if let Some(short_title) = thread.short_title() {
+                    return short_title;
+                }
+                let title = thread.title();
                 if !title.is_empty() {
                     return title;
                 }

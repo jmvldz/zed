@@ -19,6 +19,7 @@ pub use crate::agent_profile::*;
 pub const SUMMARIZE_THREAD_PROMPT: &str = include_str!("prompts/summarize_thread_prompt.txt");
 pub const SUMMARIZE_THREAD_DETAILED_PROMPT: &str =
     include_str!("prompts/summarize_thread_detailed_prompt.txt");
+pub const SHORT_TITLE_PROMPT: &str = include_str!("prompts/short_title_prompt.txt");
 
 #[derive(Clone, Debug, RegisterSetting)]
 pub struct AgentSettings {

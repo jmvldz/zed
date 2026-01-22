@@ -356,7 +356,13 @@ let panel_type = AgentSettings::get_global(cx).default_view;
     pub fn active_thread_title(&self, cx: &App) -> Option<SharedString> {
         match &self.active_view {
             ActiveView::ExternalAgentThread { thread_view } => {
-                Some(thread_view.read(cx).title(cx))
+                let thread_view = thread_view.read(cx);
+                if let Some(thread) = thread_view.thread() {
+                    if let Some(short_title) = thread.read(cx).short_title() {
+                        return Some(short_title);
+                    }
+                }
+                Some(thread_view.title(cx))
             }
             ActiveView::TextThread {
                 text_thread_editor, ..

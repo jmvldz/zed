@@ -3,7 +3,7 @@ mod diff;
 mod mention;
 mod terminal;
 
-use agent_settings::{AgentSettings, SUMMARIZE_THREAD_PROMPT};
+use agent_settings::{AgentSettings, SHORT_TITLE_PROMPT, SUMMARIZE_THREAD_PROMPT};
 use cloud_llm_client::CompletionIntent;
 use language_model::{
     LanguageModelCompletionEvent, LanguageModelRegistry, LanguageModelRequest,
@@ -16,6 +16,19 @@ pub const TOOL_NAME_META_KEY: &str = "tool_name";
 
 /// The tool name for subagent spawning
 pub const SUBAGENT_TOOL_NAME: &str = "subagent";
+
+/// Clamps a title to 2-3 words and removes punctuation.
+fn clamp_title_words(title: &str) -> String {
+    let trimmed = title.trim();
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+
+    let clamped_words = if words.len() > 3 { &words[..3] } else { &words };
+
+    let mut result: String = clamped_words.join(" ");
+    result.retain(|c| c.is_alphanumeric() || c.is_whitespace());
+    result = result.split_whitespace().collect::<Vec<_>>().join(" ");
+    result
+}
 
 /// Helper to extract tool name from ACP meta
 pub fn tool_name_from_meta(meta: &Option<acp::Meta>) -> Option<SharedString> {
@@ -955,6 +968,7 @@ pub struct RetryStatus {
 
 pub struct AcpThread {
     title: SharedString,
+    short_title: Option<SharedString>,
     entries: Vec<AgentThreadEntry>,
     plan: Plan,
     project: Entity<Project>,
@@ -970,6 +984,7 @@ pub struct AcpThread {
     pending_terminal_output: HashMap<acp::TerminalId, Vec<Vec<u8>>>,
     pending_terminal_exit: HashMap<acp::TerminalId, acp::TerminalExitStatus>,
     pending_title_generation: Option<Task<()>>,
+    pending_short_title_generation: Option<Task<()>>,
 }
 
 impl From<&AcpThread> for ActionLogTelemetry {
@@ -985,6 +1000,7 @@ impl From<&AcpThread> for ActionLogTelemetry {
 pub enum AcpThreadEvent {
     NewEntry,
     TitleUpdated,
+    ShortTitleUpdated,
     TokenUsageUpdated,
     EntryUpdated(usize),
     EntriesRemoved(Range<usize>),
@@ -1191,6 +1207,7 @@ impl AcpThread {
             entries: Default::default(),
             plan: Default::default(),
             title: title.into(),
+            short_title: None,
             project,
             send_task: None,
             connection,
@@ -1202,6 +1219,7 @@ impl AcpThread {
             pending_terminal_output: HashMap::default(),
             pending_terminal_exit: HashMap::default(),
             pending_title_generation: None,
+            pending_short_title_generation: None,
         }
     }
 
@@ -1223,6 +1241,17 @@ impl AcpThread {
 
     pub fn title(&self) -> SharedString {
         self.title.clone()
+    }
+
+    pub fn short_title(&self) -> Option<SharedString> {
+        self.short_title.clone()
+    }
+
+    pub fn set_short_title(&mut self, title: SharedString, cx: &mut Context<Self>) {
+        if Some(&title) != self.short_title.as_ref() {
+            self.short_title = Some(title);
+            cx.emit(AcpThreadEvent::ShortTitleUpdated);
+        }
     }
 
     pub fn entries(&self) -> &[AgentThreadEntry] {
@@ -1479,10 +1508,9 @@ impl AcpThread {
             return;
         }
 
-        let model = LanguageModelRegistry::global(cx).update(cx, |registry, _cx| {
+        let model = LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
             registry
-                .thread_summary_model()
-                .or_else(|| registry.default_model())
+                .thread_summary_fallback_model(cx)
                 .map(|configured| configured.model)
         });
 
@@ -1534,6 +1562,81 @@ impl AcpThread {
             }
             _ = this.update(cx, |this, _| {
                 this.pending_title_generation = None;
+            });
+        }));
+    }
+
+    pub fn is_generating_short_title(&self) -> bool {
+        self.pending_short_title_generation.is_some()
+    }
+
+    pub fn generate_short_title(&mut self, cx: &mut Context<Self>) {
+        if self.pending_short_title_generation.is_some() {
+            return;
+        }
+
+        let messages = self.messages_for_summarization(cx);
+        if messages.is_empty() {
+            return;
+        }
+
+        let model = LanguageModelRegistry::global(cx).update(cx, |registry, cx| {
+            registry
+                .thread_summary_fallback_model(cx)
+                .map(|configured| configured.model)
+        });
+
+        let Some(model) = model else {
+            return;
+        };
+
+        let mut request = LanguageModelRequest {
+            intent: Some(CompletionIntent::ThreadSummarization),
+            temperature: AgentSettings::temperature_for_model(&model, cx),
+            messages,
+            ..Default::default()
+        };
+
+        request.messages.push(LanguageModelRequestMessage {
+            role: Role::User,
+            content: vec![SHORT_TITLE_PROMPT.into()],
+            cache: false,
+            reasoning_details: None,
+        });
+
+        self.pending_short_title_generation = Some(cx.spawn(async move |this, cx| {
+            let mut title = String::new();
+
+            let generate = async {
+                use futures::StreamExt as _;
+                let mut stream = model.stream_completion(request, cx).await?;
+                while let Some(event) = stream.next().await {
+                    let event = event?;
+                    let text = match event {
+                        LanguageModelCompletionEvent::Text(text) => text,
+                        _ => continue,
+                    };
+
+                    let mut lines = text.lines();
+                    title.extend(lines.next());
+
+                    if lines.next().is_some() {
+                        break;
+                    }
+                }
+                anyhow::Ok(())
+            };
+
+            if generate.await.is_ok() && !title.is_empty() {
+                let clamped_title = clamp_title_words(&title);
+                if !clamped_title.is_empty() {
+                    _ = this.update(cx, |this, cx| {
+                        this.set_short_title(clamped_title.into(), cx);
+                    });
+                }
+            }
+            _ = this.update(cx, |this, _| {
+                this.pending_short_title_generation = None;
             });
         }));
     }
@@ -2091,6 +2194,14 @@ impl AcpThread {
                                 && !this.entries.is_empty()
                             {
                                 this.generate_title(cx);
+                            }
+
+                            // Auto-generate short title for tab display
+                            if this.short_title.is_none()
+                                && this.pending_short_title_generation.is_none()
+                                && !this.entries.is_empty()
+                            {
+                                this.generate_short_title(cx);
                             }
                         }
 

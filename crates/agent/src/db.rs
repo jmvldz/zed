@@ -34,6 +34,8 @@ pub struct DbThreadMetadata {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DbThread {
     pub title: SharedString,
+    #[serde(default)]
+    pub short_title: Option<SharedString>,
     pub messages: Vec<DbMessage>,
     pub updated_at: DateTime<Utc>,
     #[serde(default)]
@@ -78,6 +80,7 @@ impl SharedThread {
     pub fn to_db_thread(self) -> DbThread {
         DbThread {
             title: format!("🔗 {}", self.title).into(),
+            short_title: None,
             messages: self.messages,
             updated_at: self.updated_at,
             detailed_summary: None,
@@ -247,6 +250,7 @@ impl DbThread {
 
         Ok(Self {
             title: thread.summary,
+            short_title: None,
             messages,
             updated_at: thread.updated_at,
             detailed_summary: match thread.detailed_summary_state {
@@ -543,6 +547,7 @@ mod tests {
     fn make_thread(title: &str, updated_at: DateTime<Utc>) -> DbThread {
         DbThread {
             title: title.to_string().into(),
+            short_title: None,
             messages: Vec::new(),
             updated_at,
             detailed_summary: None,

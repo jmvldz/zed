@@ -12,8 +12,8 @@ use feature_flags::{FeatureFlagAppExt as _, SubagentsFeatureFlag};
 
 use agent_client_protocol as acp;
 use agent_settings::{
-    AgentProfileId, AgentProfileSettings, AgentSettings, SUMMARIZE_THREAD_DETAILED_PROMPT,
-    SUMMARIZE_THREAD_PROMPT,
+    AgentProfileId, AgentProfileSettings, AgentSettings, SHORT_TITLE_PROMPT,
+    SUMMARIZE_THREAD_DETAILED_PROMPT, SUMMARIZE_THREAD_PROMPT,
 };
 use anyhow::{Context as _, Result, anyhow};
 use chrono::{DateTime, Utc};
@@ -61,6 +61,21 @@ const TOOL_CANCELED_MESSAGE: &str = "Tool canceled by user";
 pub const MAX_TOOL_NAME_LENGTH: usize = 64;
 pub const MAX_SUBAGENT_DEPTH: u8 = 4;
 pub const MAX_PARALLEL_SUBAGENTS: usize = 8;
+
+/// Clamps a title to 2-3 words and removes punctuation.
+/// If the title has more than 3 words, only the first 3 words are kept.
+/// If the title has fewer than 2 words, it is returned as-is.
+fn clamp_title_words(title: &str) -> String {
+    let trimmed = title.trim();
+    let words: Vec<&str> = trimmed.split_whitespace().collect();
+
+    let clamped_words = if words.len() > 3 { &words[..3] } else { &words };
+
+    let mut result: String = clamped_words.join(" ");
+    result.retain(|c| c.is_alphanumeric() || c.is_whitespace());
+    result = result.split_whitespace().collect::<Vec<_>>().join(" ");
+    result
+}
 
 /// Context passed to a subagent thread for lifecycle management
 #[derive(Clone)]
@@ -714,7 +729,9 @@ pub struct Thread {
     prompt_id: PromptId,
     updated_at: DateTime<Utc>,
     title: Option<SharedString>,
+    short_title: Option<SharedString>,
     pending_title_generation: Option<Task<()>>,
+    pending_short_title_generation: Option<Task<()>>,
     pending_summary_generation: Option<Shared<Task<Option<SharedString>>>>,
     summary: Option<SharedString>,
     messages: Vec<Message>,
@@ -776,7 +793,9 @@ impl Thread {
             prompt_id: PromptId::new(),
             updated_at: Utc::now(),
             title: None,
+            short_title: None,
             pending_title_generation: None,
+            pending_short_title_generation: None,
             pending_summary_generation: None,
             summary: None,
             messages: Vec::new(),
@@ -829,7 +848,9 @@ impl Thread {
             prompt_id: PromptId::new(),
             updated_at: Utc::now(),
             title: None,
+            short_title: None,
             pending_title_generation: None,
+            pending_short_title_generation: None,
             pending_summary_generation: None,
             summary: None,
             messages: Vec::new(),
@@ -1026,7 +1047,9 @@ impl Thread {
             } else {
                 Some(db_thread.title.clone())
             },
+            short_title: db_thread.short_title.clone(),
             pending_title_generation: None,
+            pending_short_title_generation: None,
             pending_summary_generation: None,
             summary: db_thread.detailed_summary,
             messages: db_thread.messages,
@@ -1060,6 +1083,7 @@ impl Thread {
         let initial_project_snapshot = self.initial_project_snapshot.clone();
         let mut thread = DbThread {
             title: self.title(),
+            short_title: self.short_title.clone(),
             messages: self.messages.clone(),
             updated_at: self.updated_at,
             detailed_summary: self.summary.clone(),
@@ -1671,6 +1695,9 @@ impl Thread {
                 if this.title.is_none() && this.pending_title_generation.is_none() {
                     this.generate_title(cx);
                 }
+                if this.short_title.is_none() && this.pending_short_title_generation.is_none() {
+                    this.generate_short_title(cx);
+                }
             })?;
 
             if cancelled {
@@ -2014,12 +2041,20 @@ impl Thread {
         self.title.clone().unwrap_or("New Thread".into())
     }
 
+    pub fn short_title(&self) -> Option<SharedString> {
+        self.short_title.clone()
+    }
+
     pub fn is_generating_summary(&self) -> bool {
         self.pending_summary_generation.is_some()
     }
 
     pub fn is_generating_title(&self) -> bool {
         self.pending_title_generation.is_some()
+    }
+
+    pub fn is_generating_short_title(&self) -> bool {
+        self.pending_short_title_generation.is_some()
     }
 
     pub fn summary(&mut self, cx: &mut Context<Self>) -> Shared<Task<Option<SharedString>>> {
@@ -2142,6 +2177,72 @@ impl Thread {
         if Some(&title) != self.title.as_ref() {
             self.title = Some(title);
             cx.emit(TitleUpdated);
+            cx.notify();
+        }
+    }
+
+    pub fn generate_short_title(&mut self, cx: &mut Context<Self>) {
+        let Some(model) = self.summarization_model.clone() else {
+            return;
+        };
+
+        log::debug!(
+            "Generating short title with model: {:?}",
+            self.summarization_model.as_ref().map(|model| model.name())
+        );
+        let mut request = LanguageModelRequest {
+            intent: Some(CompletionIntent::ThreadSummarization),
+            temperature: AgentSettings::temperature_for_model(&model, cx),
+            ..Default::default()
+        };
+
+        for message in &self.messages {
+            request.messages.extend(message.to_request());
+        }
+
+        request.messages.push(LanguageModelRequestMessage {
+            role: Role::User,
+            content: vec![SHORT_TITLE_PROMPT.into()],
+            cache: false,
+            reasoning_details: None,
+        });
+        self.pending_short_title_generation = Some(cx.spawn(async move |this, cx| {
+            let mut title = String::new();
+
+            let generate = async {
+                let mut messages = model.stream_completion(request, cx).await?;
+                while let Some(event) = messages.next().await {
+                    let event = event?;
+                    let text = match event {
+                        LanguageModelCompletionEvent::Text(text) => text,
+                        _ => continue,
+                    };
+
+                    let mut lines = text.lines();
+                    title.extend(lines.next());
+
+                    if lines.next().is_some() {
+                        break;
+                    }
+                }
+                anyhow::Ok(())
+            };
+
+            if generate.await.context("failed to generate short title").is_ok() {
+                let clamped_title = clamp_title_words(&title);
+                if !clamped_title.is_empty() {
+                    _ = this.update(cx, |this, cx| this.set_short_title(clamped_title.into(), cx));
+                }
+            }
+            _ = this.update(cx, |this, _| this.pending_short_title_generation = None);
+        }));
+    }
+
+    pub fn set_short_title(&mut self, title: SharedString, cx: &mut Context<Self>) {
+        self.pending_short_title_generation = None;
+        if Some(&title) != self.short_title.as_ref() {
+            self.short_title = Some(title);
+            cx.emit(ShortTitleUpdated);
             cx.notify();
         }
     }
@@ -2599,6 +2700,10 @@ impl EventEmitter<TokenUsageUpdated> for Thread {}
 pub struct TitleUpdated;
 
 impl EventEmitter<TitleUpdated> for Thread {}
+
+pub struct ShortTitleUpdated;
+
+impl EventEmitter<ShortTitleUpdated> for Thread {}
 
 pub trait AgentTool
 where
@@ -3329,5 +3434,58 @@ fn convert_image(image_content: acp::ImageContent) -> LanguageModelImage {
     LanguageModelImage {
         source: image_content.data.into(),
         size: None,
+    }
+}
+
+#[cfg(test)]
+mod clamp_title_tests {
+    use super::*;
+
+    #[test]
+    fn test_clamp_title_words_with_three_words() {
+        assert_eq!(clamp_title_words("Hello World Test"), "Hello World Test");
+    }
+
+    #[test]
+    fn test_clamp_title_words_with_more_than_three_words() {
+        assert_eq!(
+            clamp_title_words("Hello World Test Extra Words"),
+            "Hello World Test"
+        );
+    }
+
+    #[test]
+    fn test_clamp_title_words_with_two_words() {
+        assert_eq!(clamp_title_words("Hello World"), "Hello World");
+    }
+
+    #[test]
+    fn test_clamp_title_words_with_one_word() {
+        assert_eq!(clamp_title_words("Hello"), "Hello");
+    }
+
+    #[test]
+    fn test_clamp_title_words_removes_punctuation() {
+        assert_eq!(clamp_title_words("Hello, World!"), "Hello World");
+    }
+
+    #[test]
+    fn test_clamp_title_words_trims_whitespace() {
+        assert_eq!(clamp_title_words("  Hello World  "), "Hello World");
+    }
+
+    #[test]
+    fn test_clamp_title_words_handles_empty_string() {
+        assert_eq!(clamp_title_words(""), "");
+    }
+
+    #[test]
+    fn test_clamp_title_words_handles_only_punctuation() {
+        assert_eq!(clamp_title_words("..."), "");
+    }
+
+    #[test]
+    fn test_clamp_title_words_preserves_alphanumeric() {
+        assert_eq!(clamp_title_words("Test123 Code456"), "Test123 Code456");
     }
 }

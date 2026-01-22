@@ -2009,6 +2009,9 @@ impl AcpThreadView {
                 // The watch task in ConfigOptionsView handles rebuilding selectors
                 cx.notify();
             }
+            AcpThreadEvent::ShortTitleUpdated => {
+                cx.notify();
+            }
         }
         cx.notify();
     }

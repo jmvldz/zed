@@ -331,7 +331,7 @@ impl NativeAgent {
         });
 
         let registry = LanguageModelRegistry::read_global(cx);
-        let summarization_model = registry.thread_summary_model().map(|c| c.model);
+        let summarization_model = registry.thread_summary_fallback_model(cx).map(|c| c.model);
 
         thread_handle.update(cx, |thread, cx| {
             thread.set_summarization_model(summarization_model, cx);
@@ -348,6 +348,7 @@ impl NativeAgent {
                 this.sessions.remove(acp_thread.session_id());
             }),
             cx.subscribe(&thread_handle, Self::handle_thread_title_updated),
+            cx.subscribe(&thread_handle, Self::handle_thread_short_title_updated),
             cx.subscribe(&thread_handle, Self::handle_thread_token_usage_updated),
             cx.observe(&thread_handle, move |this, thread, cx| {
                 this.save_thread(thread, cx)
@@ -558,6 +559,30 @@ impl NativeAgent {
         .detach_and_log_err(cx);
     }
 
+    fn handle_thread_short_title_updated(
+        &mut self,
+        thread: Entity<Thread>,
+        _: &ShortTitleUpdated,
+        cx: &mut Context<Self>,
+    ) {
+        let session_id = thread.read(cx).id();
+        let Some(session) = self.sessions.get(session_id) else {
+            return;
+        };
+        let thread = thread.downgrade();
+        let acp_thread = session.acp_thread.clone();
+        cx.spawn(async move |_, cx| {
+            let short_title = thread.read_with(cx, |thread, _| thread.short_title())?;
+            if let Some(short_title) = short_title {
+                acp_thread.update(cx, |acp_thread, cx| {
+                    acp_thread.set_short_title(short_title, cx);
+                })?;
+            }
+            anyhow::Ok(())
+        })
+        .detach_and_log_err(cx);
+    }
+
     fn handle_thread_token_usage_updated(
         &mut self,
         thread: Entity<Thread>,
@@ -617,7 +642,7 @@ impl NativeAgent {
 
         let registry = LanguageModelRegistry::read_global(cx);
         let default_model = registry.default_model().map(|m| m.model);
-        let summarization_model = registry.thread_summary_model().map(|m| m.model);
+        let summarization_model = registry.thread_summary_fallback_model(cx).map(|m| m.model);
 
         for session in self.sessions.values_mut() {
             session.thread.update(cx, |thread, cx| {
@@ -740,7 +765,7 @@ impl NativeAgent {
 
             this.update(cx, |this, cx| {
                 let summarization_model = LanguageModelRegistry::read_global(cx)
-                    .thread_summary_model()
+                    .thread_summary_fallback_model(cx)
                     .map(|c| c.model);
 
                 cx.new(|cx| {

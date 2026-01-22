@@ -448,6 +448,62 @@ impl LanguageModelRegistry {
             .or_else(|| self.default_model.clone())
     }
 
+    /// Returns a model suitable for thread summarization/title generation,
+    /// ensuring the provider is authenticated. This is useful for avoiding
+    /// attempts to use unauthenticated providers like LM Studio by default.
+    ///
+    /// The fallback order is:
+    /// 1. `thread_summary_model` if its provider is authenticated
+    /// 2. `default_fast_model` if its provider is authenticated
+    /// 3. `default_model` if its provider is authenticated
+    /// 4. First authenticated provider's `default_fast_model` or first model
+    pub fn thread_summary_fallback_model(&self, cx: &App) -> Option<ConfiguredModel> {
+        #[cfg(debug_assertions)]
+        if std::env::var("ZED_SIMULATE_NO_LLM_PROVIDER").is_ok() {
+            return None;
+        }
+
+        if let Some(ref model) = self.thread_summary_model {
+            if model.provider.is_authenticated(cx) {
+                return Some(model.clone());
+            }
+        }
+
+        if let Some(ref model) = self.default_fast_model {
+            if model.provider.is_authenticated(cx) {
+                return Some(model.clone());
+            }
+        }
+
+        if let Some(ref model) = self.default_model {
+            if model.provider.is_authenticated(cx) {
+                return Some(model.clone());
+            }
+        }
+
+        for provider in self.providers.values() {
+            if !provider.is_authenticated(cx) {
+                continue;
+            }
+
+            if let Some(fast_model) = provider.default_fast_model(cx) {
+                return Some(ConfiguredModel {
+                    provider: provider.clone(),
+                    model: fast_model,
+                });
+            }
+
+            if let Some(model) = provider.provided_models(cx).first().cloned() {
+                return Some(ConfiguredModel {
+                    provider: provider.clone(),
+                    model,
+                });
+            }
+        }
+
+        None
+    }
+
     /// The models to use for inline assists. Returns the union of the active
     /// model and all inline alternatives. When there are multiple models, the
     /// user will be able to cycle through results.
@@ -608,5 +664,25 @@ mod tests {
         });
 
         assert_eq!(registry.read(cx).visible_providers().len(), 1);
+    }
+
+    #[gpui::test]
+    fn test_thread_summary_fallback_model_uses_authenticated_provider(cx: &mut App) {
+        let registry = cx.new(|_| LanguageModelRegistry::default());
+
+        let provider = Arc::new(FakeLanguageModelProvider::default());
+
+        registry.update(cx, |registry, cx| {
+            registry.register_provider(provider.clone(), cx);
+        });
+
+        let fallback = registry.read(cx).thread_summary_fallback_model(cx);
+        assert!(
+            fallback.is_some(),
+            "Should return a model when authenticated provider is available"
+        );
+
+        let model = fallback.unwrap();
+        assert_eq!(model.provider.id(), provider.id());
     }
 }
