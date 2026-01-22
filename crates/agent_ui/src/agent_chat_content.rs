@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-use acp_thread::AgentSessionInfo;
+use acp_thread::{AgentSessionInfo, ThreadStatus};
 use agent::{ContextServerRegistry, ThreadStore};
 use agent_servers::AgentServer;
 use anyhow::Result;
@@ -369,6 +369,18 @@ let panel_type = AgentSettings::get_global(cx).default_view;
     pub fn has_unsent_message(&self, _cx: &App) -> bool {
         // TODO: Implement actual check for unsent messages
         false
+    }
+
+    pub fn is_generating(&self, cx: &App) -> bool {
+        match &self.active_view {
+            ActiveView::ExternalAgentThread { thread_view } => thread_view
+                .read(cx)
+                .thread()
+                .map_or(false, |thread| {
+                    thread.read(cx).status() == ThreadStatus::Generating
+                }),
+            _ => false,
+        }
     }
 
     pub fn should_show_toolbar(&self) -> bool {

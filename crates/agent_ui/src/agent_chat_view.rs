@@ -10,7 +10,7 @@ use gpui::{
 use project::{ExternalAgentServerName, Project, ProjectPath};
 use prompt_store::PromptBuilder;
 use serde::{Deserialize, Serialize};
-use ui::{prelude::*, Color, ContextMenu, ContextMenuEntry, ContextMenuItem, Icon, IconButton, IconName, IconSize, Label, PopoverMenu, Tab, Tooltip};
+use ui::{prelude::*, Color, ContextMenu, ContextMenuEntry, ContextMenuItem, Icon, IconButton, IconName, IconSize, Label, PopoverMenu, SpinnerLabel, Tab, Tooltip};
 use workspace::{
     AppState, Item, ItemId, ItemNavHistory, SerializableItem, Workspace, WorkspaceId,
     delete_unloaded_items,
@@ -220,16 +220,21 @@ impl Item for AgentChatView {
 
     fn tab_content(&self, params: TabContentParams, _window: &Window, cx: &App) -> gpui::AnyElement {
         let title = self.title(cx);
-        let has_unsent_message = self.content.read(cx).has_unsent_message(cx);
+        let content = self.content.read(cx);
+        let has_unsent_message = content.has_unsent_message(cx);
+        let is_generating = content.is_generating(cx);
 
         h_flex()
-            .gap_2()
+            .gap_1p5()
+            .when(is_generating, |this| {
+                this.child(SpinnerLabel::new().size(ui::LabelSize::Small).color(Color::Muted))
+            })
             .child(
                 Label::new(title).color(if params.selected {
                     Color::Default
                 } else {
                     Color::Muted
-                })
+                }),
             )
             .when(has_unsent_message, |this| {
                 this.child(
@@ -237,7 +242,7 @@ impl Item for AgentChatView {
                         .w_2()
                         .h_2()
                         .rounded_full()
-                        .bg(cx.theme().colors().icon_accent)
+                        .bg(cx.theme().colors().icon_accent),
                 )
             })
             .into_any_element()
@@ -245,6 +250,11 @@ impl Item for AgentChatView {
 
     fn tab_icon(&self, window: &Window, cx: &App) -> Option<Icon> {
         let content = self.content.read(cx);
+
+        if content.is_generating(cx) {
+            return None;
+        }
+
         let agent_type = &content.selected_agent;
         let icon_offset = {
             let tab_padding = DynamicSpacing::Base04.px(cx);
