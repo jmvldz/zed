@@ -451,7 +451,6 @@ impl Item for AgentChatView {
                             }
                         }),
                 ));
-                menu.push_item(ContextMenuItem::Separator);
             });
             menu
         }))

@@ -4111,6 +4111,7 @@ fn default_render_tab_bar_buttons(
                             .action("Search Symbols", ToggleProjectSymbols.boxed_clone())
                             .separator()
                             .action("New Terminal", NewTerminal::default().boxed_clone())
+                            .separator()
                     });
                     // Apply custom entries from active item at the beginning of the menu
                     let menu = if let Some(custom_entries) = custom_menu_entries.borrow_mut().take()
