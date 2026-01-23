@@ -12,6 +12,8 @@ between worktrees for the same repo within a window.
 - No multi-repo registry inside a window.
 - No single-window enforcement; opening new windows remains unchanged.
 - Worktree panel only shows worktrees for the current repo.
+- Worktree registry persistence is shared per repo identity; active slot selection
+  remains per window.
 
 ## Architecture Diagram
 
@@ -41,7 +43,6 @@ WorktreeRegistry (Window-scoped Entity stored on Workspace)
 ├── repo_root_path: PathBuf
 ├── worktrees: Vec<WorktreeEntry>
 ├── slots: HashMap<WorktreeSlotId, WorktreeSlot>
-├── next_slot_id: u64
 └── db: WorktreeRegistryDb
 
 WorktreeEntry
@@ -59,8 +60,10 @@ WorktreeSlot
 └── serialized: Option<SerializedWorkspaceSlot>
 
 Note: repo_identity_path uses the git common dir when available, and falls back
-to repo_root_path for non-git folders. The active slot ID lives on the
-Workspace (window-scoped), not global.
+to repo_root_path for non-git folders. WorktreeSlotId is derived from the git
+worktree gitdir path (GitRepository::path) when available, otherwise from the
+canonical worktree path. The active slot ID lives on the Workspace
+(window-scoped), not global.
 ```
 
 ---
@@ -80,16 +83,18 @@ current repo.
   - `add_worktree` and `remove_worktree` for registry updates
   - `scan_repo_worktrees` for discovery via GitRepository
   - `set_active_slot` to update last_accessed and emit events
+- Derive WorktreeSlotId from git worktree gitdir path (or canonical worktree
+  path for non-git), so ids are stable across restarts.
 
 ### 1.2 Create Registry Database
 
 **File:** `crates/workspace/src/worktree_registry_db.rs` (new)
 
-- Persist worktree entries and serialized slot state by repo_identity_path.
+- Persist worktree entries by repo_identity_path and WorktreeSlotId.
 - Load entries on Workspace initialization for the repo root.
 - Errors propagate with `Result` (no panicking).
 - If multiple windows open the same repo, last_accessed and slot state use a
-  last-writer-wins model.
+  last-writer-wins model for shared fields (worktree list, chat counts).
 
 ### 1.3 Integrate into Workspace
 
@@ -175,7 +180,8 @@ serde.workspace = true
 
 **File:** `crates/workspace/src/worktree_registry_db.rs` (modify)
 
-- Save and load serialized slot state per slot_id and repo_root_path.
+- Save and load serialized slot state per WorktreeSlotId and window_id (or
+  workspace_id) to avoid cross-window clobbering.
 
 ### 3.3 Integrate with WorktreeSlot
 
@@ -200,6 +206,8 @@ serde.workspace = true
 - `switch_to_slot` saves current slot state, swaps Project, and restores layout.
 - Shutdown and restart LSPs during the swap as needed.
 - Update WorktreeRegistry slot states (Active/Cached/Unloaded).
+- Stop or park project-scoped background tasks for the old slot when it becomes
+  inactive, and ensure they resume only when that slot is re-activated.
 
 ### 4.2 Handle Unsaved Changes
 
@@ -217,7 +225,8 @@ serde.workspace = true
 - Switching changes the active slot without changing the repo.
 - Current slot state is saved before switching.
 - Target slot state is restored after switching.
-- LSPs and subscriptions are re-bound to the new Project.
+- LSPs, subscriptions, and project-scoped background tasks are re-bound to the
+  new Project without leaking updates from inactive slots.
 
 ---
 
@@ -229,7 +238,8 @@ serde.workspace = true
 
 **File:** `crates/agent/src/db.rs` (modify)
 
-- Add `worktree_slot_id` to thread metadata and queries.
+- Add `worktree_slot_id` to thread metadata and queries (stable id derived from
+  gitdir/canonical path).
 - If an existing `workspace_slot_id` column exists, keep it and treat it as the
   worktree slot ID to avoid a breaking migration.
 
@@ -269,7 +279,14 @@ serde.workspace = true
 
 - Discover existing worktrees for the repo root on Workspace initialization.
 
-### 6.3 Non-Git Repo Behavior
+### 6.3 Watch Worktree Changes
+
+**File:** `crates/workspace/src/worktree_registry.rs` (modify)
+
+- Watch the git worktree directory (e.g. `<common_dir>/worktrees`) and rescan
+  worktrees on changes with a short debounce.
+
+### 6.4 Non-Git Repo Behavior
 
 - If the repo root is not a git repository, show a single slot labeled
   "Workspace" with a branch label like "(no git)" and disable worktree
@@ -278,6 +295,7 @@ serde.workspace = true
 **Acceptance Criteria for Phase 6:**
 - Worktree creation uses the git worktree API and updates the registry.
 - Existing worktrees are discovered for the current repo.
+- Worktree list updates when worktrees are added or removed outside Zed.
 - Non-git repos do not break the panel.
 
 ---
