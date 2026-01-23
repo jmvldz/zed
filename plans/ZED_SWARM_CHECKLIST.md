@@ -23,3 +23,6 @@ Same for codex in codex-acp.
 - Persist the open agent chat across sessions
 - Generate titles for the agent threads
 - Default opening a new agent to last used agent
+
+Bug
+- Restore session works for Codex but not native agent
