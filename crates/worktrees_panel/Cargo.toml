@@ -1,0 +1,27 @@
+[package]
+name = "worktrees_panel"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+license = "GPL-3.0-or-later"
+
+[lints]
+workspace = true
+
+[lib]
+path = "src/worktrees_panel.rs"
+doctest = false
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+collections.workspace = true
+git.workspace = true
+gpui.workspace = true
+schemars.workspace = true
+serde.workspace = true
+settings.workspace = true
+theme.workspace = true
+ui.workspace = true
+util.workspace = true
+workspace.workspace = true

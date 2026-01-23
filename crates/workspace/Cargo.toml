@@ -30,6 +30,7 @@ any_vec.workspace = true
 anyhow.workspace = true
 async-recursion.workspace = true
 call.workspace = true
+chrono.workspace = true
 client.workspace = true
 clock.workspace = true
 collections.workspace = true

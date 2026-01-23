@@ -19,8 +19,12 @@ mod toolbar;
 pub mod utility_pane;
 pub mod welcome;
 mod workspace_settings;
+pub mod worktree_registry;
 
 pub use crate::notifications::NotificationFrame;
+pub use crate::worktree_registry::{
+    WorktreeEntry, WorktreeRegistry, WorktreeRegistryEvent, WorktreeSlotId,
+};
 pub use dock::Panel;
 pub use path_list::PathList;
 pub use toast_layer::{ToastAction, ToastLayer, ToastView};
@@ -78,6 +82,7 @@ use project::{
     DirectoryLister, Project, ProjectEntryId, ProjectPath, ResolvedPath, Worktree, WorktreeId,
     WorktreeSettings,
     debugger::{breakpoint_store::BreakpointStoreEvent, session::ThreadStatus},
+    git_store::GitStoreEvent,
     project_settings::ProjectSettings,
     toolchain_store::ToolchainStoreEvent,
     trusted_worktrees::{RemoteHostLocation, TrustedWorktrees, TrustedWorktreesEvent},
@@ -1225,6 +1230,7 @@ pub struct Workspace {
     last_open_dock_positions: Vec<DockPosition>,
     removing: bool,
     utility_panes: UtilityPaneState,
+    worktree_registry: Option<Entity<WorktreeRegistry>>,
 }
 
 impl EventEmitter<Event> for Workspace {}
@@ -1573,6 +1579,7 @@ impl Workspace {
         cx.defer_in(window, move |this, window, cx| {
             this.update_window_title(window, cx);
             this.show_initial_notifications(cx);
+            this.initialize_worktree_registry(cx);
         });
 
         let mut center = PaneGroup::new(center_pane.clone());
@@ -1634,6 +1641,7 @@ impl Workspace {
             last_open_dock_positions: Vec::new(),
             removing: false,
             utility_panes: UtilityPaneState::default(),
+            worktree_registry: None,
         }
     }
 
@@ -1944,6 +1952,111 @@ impl Workspace {
 
     pub fn project(&self) -> &Entity<Project> {
         &self.project
+    }
+
+    pub fn worktree_registry(&self) -> Option<&Entity<WorktreeRegistry>> {
+        self.worktree_registry.as_ref()
+    }
+
+    fn initialize_worktree_registry(&mut self, cx: &mut Context<Self>) {
+        if self.worktree_registry.is_some() {
+            return;
+        }
+
+        let project = self.project.clone();
+        let visible_worktree_count = project.read(cx).visible_worktrees(cx).count();
+        log::info!(
+            "WorktreeRegistry init: visible_worktrees={}",
+            visible_worktree_count
+        );
+        let first_worktree = project.read(cx).visible_worktrees(cx).next();
+
+        let Some(worktree) = first_worktree else {
+            log::info!("WorktreeRegistry init: no visible worktrees");
+            return;
+        };
+
+        let repo_root_path = worktree.read(cx).abs_path().to_path_buf();
+        log::info!(
+            "WorktreeRegistry init: repo_root_path={:?}",
+            repo_root_path
+        );
+
+        let git_store = project.read(cx).git_store().clone();
+        let (repository_count, repository_paths, active_repository_path) = {
+            let git_store = git_store.read(cx);
+            let repositories = git_store.repositories();
+            let paths = repositories
+                .values()
+                .map(|repo| repo.read(cx).work_directory_abs_path.to_path_buf())
+                .collect::<Vec<_>>();
+            let active_path = git_store
+                .active_repository()
+                .map(|repo| repo.read(cx).work_directory_abs_path.to_path_buf());
+            (repositories.len(), paths, active_path)
+        };
+        let is_git_repo = repository_count > 0;
+        log::info!(
+            "WorktreeRegistry init: repositories={} paths={:?} active_repository_path={:?} is_git_repo={}",
+            repository_count,
+            repository_paths,
+            active_repository_path,
+            is_git_repo
+        );
+
+        let repo_identity_path = if is_git_repo {
+            repository_paths
+                .first()
+                .cloned()
+                .unwrap_or_else(|| repo_root_path.clone())
+        } else {
+            repo_root_path.clone()
+        };
+        log::info!(
+            "WorktreeRegistry init: repo_identity_path={:?}",
+            repo_identity_path
+        );
+
+        let weak_project = project.downgrade();
+        let registry = cx.new(|cx| {
+            worktree_registry::WorktreeRegistry::new(
+                weak_project,
+                repo_root_path,
+                repo_identity_path,
+                is_git_repo,
+                cx,
+            )
+        });
+
+        self.worktree_registry = Some(registry);
+
+        let git_store = project.read(cx).git_store().clone();
+        let git_store_handle = git_store.clone();
+        let registry_handle = self.worktree_registry.as_ref().unwrap().clone();
+        self._subscriptions.push(cx.subscribe(&git_store, move |_workspace, _, event, cx| {
+            match event {
+                GitStoreEvent::RepositoryAdded | GitStoreEvent::ActiveRepositoryChanged(_) => {
+                    if registry_handle.read(cx).is_git_repo() {
+                        return;
+                    }
+
+                    let repo_identity_path = {
+                        let git_store = git_store_handle.read(cx);
+                        git_store
+                            .active_repository()
+                            .or_else(|| git_store.repositories().values().next().cloned())
+                            .map(|repo| repo.read(cx).work_directory_abs_path.to_path_buf())
+                    };
+
+                    if let Some(repo_identity_path) = repo_identity_path {
+                        registry_handle.update(cx, |registry, cx| {
+                            registry.enable_git_repo(repo_identity_path, cx);
+                        });
+                    }
+                }
+                _ => {}
+            }
+        }));
     }
 
     pub fn path_style(&self, cx: &App) -> PathStyle {

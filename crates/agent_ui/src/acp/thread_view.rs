@@ -717,11 +717,8 @@ impl AcpThreadView {
 
                         // Store session_id for serialization (so it's available even if thread is not Ready)
                         if this.resume_thread_metadata.is_none() {
-                            log::info!(
-                                "AcpThreadView: Thread became Ready, storing session_id={} in resume_thread_metadata",
-                                session_id
-                            );
-                            this.resume_thread_metadata = Some(AgentSessionInfo::new(session_id.clone()));
+                            this.resume_thread_metadata =
+                                Some(AgentSessionInfo::new(session_id.clone()));
                         }
 
                         let session_list = if connection.supports_load_session(cx) {
@@ -986,31 +983,12 @@ impl AcpThreadView {
     }
 
     pub fn session_id(&self, cx: &App) -> Option<acp::SessionId> {
-        let thread_state_name = match &self.thread_state {
-            ThreadState::Ready { .. } => "Ready",
-            ThreadState::Loading { .. } => "Loading",
-            ThreadState::Unauthenticated { .. } => "Unauthenticated",
-            ThreadState::LoadError { .. } => "LoadError",
-        };
-        log::info!(
-            "AcpThreadView::session_id: thread_state={}, resume_thread_metadata.is_some()={}",
-            thread_state_name,
-            self.resume_thread_metadata.is_some()
-        );
         if let Some(thread) = self.thread() {
-            let session_id = thread.read(cx).session_id().clone();
-            log::info!("AcpThreadView::session_id: got from thread: {}", session_id);
-            return Some(session_id);
+            return Some(thread.read(cx).session_id().clone());
         }
-        let result = self
-            .resume_thread_metadata
+        self.resume_thread_metadata
             .as_ref()
-            .map(|m| m.session_id.clone());
-        log::info!(
-            "AcpThreadView::session_id: from resume_thread_metadata: {:?}",
-            result
-        );
-        result
+            .map(|m| m.session_id.clone())
     }
 
     pub fn mode_selector(&self) -> Option<&Entity<ModeSelector>> {

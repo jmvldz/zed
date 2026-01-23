@@ -594,22 +594,8 @@ impl SerializableItem for AgentChatView {
 
             let view = cx.update(|window, cx| {
                 let view = cx.new(|cx| Self::new(content, workspace, window, cx));
-                log::info!(
-                    "AgentChatView::deserialize: serialized state = {:?}",
-                    serialized
-                );
                 if let Some(state) = serialized {
                     if let Some(selected_agent) = state.selected_agent {
-                        log::info!(
-                            "AgentChatView::deserialize: restoring agent={:?}, session_id={:?}",
-                            selected_agent,
-                            state.session_id
-                        );
-                        if state.session_id.is_none() {
-                            log::info!(
-                                "AgentChatView::deserialize: session_id missing; restore_agent will start a new thread"
-                            );
-                        }
                         view.update(cx, |view, cx| {
                             view.content.update(cx, |content, cx| {
                                 content.restore_agent(selected_agent, state.session_id, window, cx);
@@ -635,11 +621,6 @@ impl SerializableItem for AgentChatView {
         let workspace_id = _workspace.database_id()?;
         let selected_agent = self.content.read(_cx).selected_agent.clone();
         let session_id = self.content.read(_cx).active_session_id(_cx);
-        log::info!(
-            "AgentChatView::serialize: selected_agent={:?}, session_id={:?}",
-            selected_agent,
-            session_id
-        );
         let state = SerializedAgentChatView {
             selected_agent: Some(selected_agent),
             session_id,

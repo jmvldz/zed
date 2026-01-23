@@ -786,3 +786,21 @@ pub enum ProjectPanelSortMode {
 pub struct ProjectPanelIndentGuidesSettings {
     pub show: Option<ShowIndentGuides>,
 }
+
+#[with_fallible_options]
+#[derive(Clone, PartialEq, Default, Serialize, Deserialize, JsonSchema, MergeFrom, Debug)]
+pub struct WorktreesPanelSettingsContent {
+    /// Whether to show the worktrees panel button in the status bar.
+    ///
+    /// Default: true
+    pub button: Option<bool>,
+    /// Customize default width (in pixels) taken by worktrees panel
+    ///
+    /// Default: 240
+    #[serde(serialize_with = "serialize_optional_f32_with_two_decimal_places")]
+    pub default_width: Option<f32>,
+    /// The position of worktrees panel
+    ///
+    /// Default: left
+    pub dock: Option<DockSide>,
+}

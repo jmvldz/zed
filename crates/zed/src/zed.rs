@@ -56,6 +56,7 @@ use paths::{
 };
 use project::{DirectoryLister, DisableAiSettings, ProjectItem};
 use project_panel::ProjectPanel;
+use worktrees_panel::WorktreesPanel;
 use prompt_store::PromptBuilder;
 use quick_action_bar::QuickActionBar;
 use recent_projects::open_remote_project;
@@ -657,7 +658,9 @@ fn initialize_panels(
             workspace_handle.clone(),
             cx.clone(),
         );
-        let debug_panel = DebugPanel::load(workspace_handle.clone(), cx);
+        let mut debug_cx = cx.clone();
+        let debug_panel = DebugPanel::load(workspace_handle.clone(), &mut debug_cx);
+        let worktrees_panel = WorktreesPanel::load(workspace_handle.clone(), cx);
 
         async fn add_panel_when_ready(
             panel_task: impl Future<Output = anyhow::Result<Entity<impl workspace::Panel>>> + 'static,
@@ -682,6 +685,7 @@ fn initialize_panels(
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(notification_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(worktrees_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle.clone(), prompt_builder, cx.clone()).map(|r| r.log_err()),
             initialize_agents_panel(workspace_handle, cx.clone()).map(|r| r.log_err())
         );
@@ -4954,6 +4958,7 @@ mod tests {
             collab_ui::init(&app_state, cx);
             git_ui::init(cx);
             project_panel::init(cx);
+            worktrees_panel::init(cx);
             outline_panel::init(cx);
             terminal_view::init(cx);
             copilot_chat::init(

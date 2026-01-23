@@ -20355,6 +20355,7 @@ dependencies = [
  "anyhow",
  "async-recursion",
  "call",
+ "chrono",
  "client",
  "clock",
  "collections",
@@ -20445,6 +20446,24 @@ dependencies = [
  "gpui",
  "settings",
  "worktree",
+]
+
+[[package]]
+name = "worktrees_panel"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "collections",
+ "git",
+ "gpui",
+ "schemars",
+ "serde",
+ "settings",
+ "theme",
+ "ui",
+ "util",
+ "workspace",
 ]
 
 [[package]]
@@ -20949,6 +20968,7 @@ dependencies = [
  "windows 0.61.3",
  "winresource",
  "workspace",
+ "worktrees_panel",
  "zed-reqwest",
  "zed_actions",
  "zed_env_vars",
