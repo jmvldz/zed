@@ -594,12 +594,28 @@ impl SerializableItem for AgentChatView {
 
             let view = cx.update(|window, cx| {
                 let view = cx.new(|cx| Self::new(content, workspace, window, cx));
-                if let Some(selected_agent) = serialized.and_then(|state| state.selected_agent) {
-                    view.update(cx, |view, cx| {
-                        view.content.update(cx, |content, cx| {
-                            content.restore_agent(selected_agent, window, cx);
+                log::info!(
+                    "AgentChatView::deserialize: serialized state = {:?}",
+                    serialized
+                );
+                if let Some(state) = serialized {
+                    if let Some(selected_agent) = state.selected_agent {
+                        log::info!(
+                            "AgentChatView::deserialize: restoring agent={:?}, session_id={:?}",
+                            selected_agent,
+                            state.session_id
+                        );
+                        if state.session_id.is_none() {
+                            log::info!(
+                                "AgentChatView::deserialize: session_id missing; restore_agent will start a new thread"
+                            );
+                        }
+                        view.update(cx, |view, cx| {
+                            view.content.update(cx, |content, cx| {
+                                content.restore_agent(selected_agent, state.session_id, window, cx);
+                            });
                         });
-                    });
+                    }
                 }
                 view
             })?;
@@ -618,8 +634,15 @@ impl SerializableItem for AgentChatView {
     ) -> Option<Task<Result<()>>> {
         let workspace_id = _workspace.database_id()?;
         let selected_agent = self.content.read(_cx).selected_agent.clone();
+        let session_id = self.content.read(_cx).active_session_id(_cx);
+        log::info!(
+            "AgentChatView::serialize: selected_agent={:?}, session_id={:?}",
+            selected_agent,
+            session_id
+        );
         let state = SerializedAgentChatView {
             selected_agent: Some(selected_agent),
+            session_id,
         };
 
         Some(_cx.background_spawn(async move {
@@ -641,6 +664,8 @@ pub fn register_serializable_item(cx: &mut App) {
 #[derive(Debug, Serialize, Deserialize)]
 struct SerializedAgentChatView {
     selected_agent: Option<crate::agent_chat_content::AgentType>,
+    #[serde(default)]
+    session_id: Option<String>,
 }
 
 mod persistence {
@@ -657,16 +682,21 @@ mod persistence {
     impl Domain for AgentChatViewDb {
         const NAME: &str = stringify!(AgentChatViewDb);
 
-        const MIGRATIONS: &[&str] = &[sql!(
-            CREATE TABLE agent_chat_views(
-                workspace_id INTEGER,
-                item_id INTEGER UNIQUE,
-                selected_agent TEXT,
-                PRIMARY KEY(workspace_id, item_id),
-                FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id)
-                ON DELETE CASCADE
-            ) STRICT;
-        )];
+        const MIGRATIONS: &[&str] = &[
+            sql!(
+                CREATE TABLE agent_chat_views(
+                    workspace_id INTEGER,
+                    item_id INTEGER UNIQUE,
+                    selected_agent TEXT,
+                    PRIMARY KEY(workspace_id, item_id),
+                    FOREIGN KEY(workspace_id) REFERENCES workspaces(workspace_id)
+                    ON DELETE CASCADE
+                ) STRICT;
+            ),
+            sql!(
+                ALTER TABLE agent_chat_views ADD COLUMN session_id TEXT;
+            ),
+        ];
     }
 
     db::static_connection!(AGENT_CHAT_VIEW_DB, AgentChatViewDb, [WorkspaceDb]);
@@ -680,13 +710,13 @@ mod persistence {
         ) -> anyhow::Result<()> {
             self.write(move |connection| {
                 let sql_stmt = sql!(
-                    INSERT OR REPLACE INTO agent_chat_views(item_id, workspace_id, selected_agent)
-                    VALUES (?, ?, ?)
+                    INSERT OR REPLACE INTO agent_chat_views(item_id, workspace_id, selected_agent, session_id)
+                    VALUES (?, ?, ?, ?)
                 );
                 let selected_agent = serde_json::to_string(&state.selected_agent)?;
                 let mut query =
-                    connection.exec_bound::<(ItemId, WorkspaceId, String)>(sql_stmt)?;
-                query((item_id, workspace_id, selected_agent)).context(format!(
+                    connection.exec_bound::<(ItemId, WorkspaceId, String, Option<String>)>(sql_stmt)?;
+                query((item_id, workspace_id, selected_agent, state.session_id)).context(format!(
                     "exec_bound failed to execute or parse for: {}",
                     sql_stmt
                 ))
@@ -700,24 +730,27 @@ mod persistence {
             workspace_id: WorkspaceId,
         ) -> anyhow::Result<Option<SerializedAgentChatView>> {
             let sql_stmt = sql!(
-                SELECT selected_agent FROM agent_chat_views WHERE item_id = ? AND workspace_id = ?
+                SELECT selected_agent, session_id FROM agent_chat_views WHERE item_id = ? AND workspace_id = ?
             );
-            let selected_agent_str =
-                self.select_row_bound::<(ItemId, WorkspaceId), String>(sql_stmt)?(
+            let row =
+                self.select_row_bound::<(ItemId, WorkspaceId), (String, Option<String>)>(sql_stmt)?(
                     (item_id, workspace_id),
                 )
                 .context(format!(
                     "Error in get_state, select_row_bound failed to execute or parse for: {}",
                     sql_stmt
                 ))?;
-            let Some(selected_agent_str) = selected_agent_str else {
+            let Some((selected_agent_str, session_id)) = row else {
                 return Ok(None);
             };
             let selected_agent =
                 serde_json::from_str::<Option<crate::agent_chat_content::AgentType>>(
                     &selected_agent_str,
                 )?;
-            Ok(Some(SerializedAgentChatView { selected_agent }))
+            Ok(Some(SerializedAgentChatView {
+                selected_agent,
+                session_id,
+            }))
         }
     }
 }

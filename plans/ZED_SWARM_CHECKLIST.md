@@ -18,3 +18,8 @@ Same for codex in codex-acp.
 4. Fix title generation
 5. Now that we show the agent type in the tab itself, remove the section below the tab
 6. fix the placement of the agent icon in the tab
+
+1/22/26
+- Persist the open agent chat across sessions
+- Generate titles for the agent threads
+- Default opening a new agent to last used agent

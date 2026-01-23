@@ -2,6 +2,7 @@ use std::{path::Path, sync::Arc};
 
 use acp_thread::{AgentSessionInfo, ThreadStatus};
 use agent::{ContextServerRegistry, ThreadStore};
+use agent_client_protocol as acp;
 use agent_servers::AgentServer;
 use anyhow::Result;
 use assistant_slash_command::SlashCommandWorkingSet;
@@ -186,6 +187,8 @@ pub struct AgentChatContent {
     pub(crate) configuration_subscription: Option<Subscription>,
     pub(crate) active_view: ActiveView,
     pub(crate) previous_view: Option<ActiveView>,
+    pub(crate) thread_view_subscription: Option<Subscription>,
+    pub(crate) last_session_id: Option<String>,
     pub(crate) _extension_subscription: Option<Subscription>,
     pub(crate) selected_agent: AgentType,
 }
@@ -332,6 +335,8 @@ let panel_type = AgentSettings::get_global(cx).default_view;
             configuration_subscription: None,
             context_server_registry,
             previous_view: None,
+            thread_view_subscription: None,
+            last_session_id: None,
             _extension_subscription: extension_subscription,
             acp_history,
             text_thread_history,
@@ -339,6 +344,11 @@ let panel_type = AgentSettings::get_global(cx).default_view;
             selected_agent: AgentType::default(),
             loading: false,
         };
+
+        if let ActiveView::ExternalAgentThread { thread_view } = &content.active_view {
+            let thread_view = thread_view.clone();
+            content.update_thread_view_subscription(Some(thread_view), cx);
+        }
 
         content.sync_agent_servers_from_extensions(cx);
         content
@@ -370,6 +380,61 @@ let panel_type = AgentSettings::get_global(cx).default_view;
             ActiveView::History { .. } => Some("History".into()),
             ActiveView::Configuration => Some("Configuration".into()),
         }
+    }
+
+    pub fn active_session_id(&self, cx: &App) -> Option<String> {
+        let result = match &self.active_view {
+            ActiveView::ExternalAgentThread { thread_view } => {
+                let session_id = thread_view.read(cx).session_id(cx);
+                log::info!(
+                    "active_session_id: ExternalAgentThread, session_id={:?}",
+                    session_id
+                );
+                session_id.map(|id| id.to_string())
+            }
+            _ => {
+                log::info!("active_session_id: Not an ExternalAgentThread");
+                None
+            }
+        };
+        log::info!("active_session_id returning: {:?}", result);
+        result
+    }
+
+    fn update_thread_view_subscription(
+        &mut self,
+        thread_view: Option<Entity<AcpThreadView>>,
+        cx: &mut Context<Self>,
+    ) {
+        self.thread_view_subscription = None;
+        self.last_session_id = None;
+
+        let Some(thread_view) = thread_view else {
+            return;
+        };
+
+        let session_id = thread_view.read(cx).session_id(cx).map(|id| id.to_string());
+        self.last_session_id = session_id.clone();
+        if session_id.is_some() {
+            return;
+        }
+        self.thread_view_subscription = Some(cx.observe(&thread_view, |this, thread_view, cx| {
+            let session_id = thread_view.read(cx).session_id(cx).map(|id| id.to_string());
+            if session_id == this.last_session_id {
+                return;
+            }
+
+            let is_available = session_id.is_some();
+            this.last_session_id = session_id;
+
+            if !is_available {
+                return;
+            }
+
+            cx.emit(AgentChatContentEvent::ThreadChanged);
+            cx.notify();
+            this.thread_view_subscription = None;
+        }));
     }
 
     pub fn has_unsent_message(&self, _cx: &App) -> bool {
@@ -580,7 +645,81 @@ let panel_type = AgentSettings::get_global(cx).default_view;
         self.set_active_view(ActiveView::Configuration, true, window, cx);
     }
 
-    pub fn restore_agent(&mut self, agent_type: AgentType, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn restore_agent(
+        &mut self,
+        agent_type: AgentType,
+        session_id: Option<String>,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        log::info!(
+            "restore_agent called with agent_type={:?}, session_id={:?}",
+            agent_type,
+            session_id
+        );
+        self.selected_agent = agent_type.clone();
+
+        if let Some(session_id) = session_id {
+            match &agent_type {
+                AgentType::NativeAgent => {
+                    log::info!("restore_agent: NativeAgent branch, session_id={}", session_id);
+                    let session_id = acp::SessionId::new(session_id);
+                    let thread = self
+                        .thread_store
+                        .read(cx)
+                        .thread_from_session_id(&session_id);
+
+                    if let Some(thread) = thread {
+                        log::info!(
+                            "restore_agent: Found thread in thread_store, title={:?}",
+                            thread.title
+                        );
+                        let session_info = AgentSessionInfo {
+                            session_id: thread.id.clone(),
+                            cwd: None,
+                            title: Some(thread.title.clone()),
+                            updated_at: Some(thread.updated_at),
+                            meta: None,
+                        };
+                        self.external_thread(
+                            Some(ExternalAgent::NativeAgent),
+                            None,
+                            Some(session_info),
+                            window,
+                            cx,
+                        );
+                        return;
+                    } else {
+                        log::info!("restore_agent: Thread NOT found in thread_store");
+                    }
+                }
+                AgentType::Gemini
+                | AgentType::ClaudeCode
+                | AgentType::Codex
+                | AgentType::Custom { .. } => {
+                    log::info!(
+                        "restore_agent: External agent branch, agent_type={:?}, session_id={}",
+                        agent_type,
+                        session_id
+                    );
+                    if let Some(agent) = self.selected_external_agent() {
+                        log::info!("restore_agent: Got external agent {:?}, calling external_thread with resume_info", agent);
+                        let resume_info = AgentSessionInfo::new(acp::SessionId::new(session_id));
+                        self.external_thread(Some(agent), Some(resume_info), None, window, cx);
+                        return;
+                    } else {
+                        log::info!("restore_agent: selected_external_agent() returned None");
+                    }
+                }
+                AgentType::TextThread => {
+                    log::info!("restore_agent: TextThread branch, no session restoration");
+                }
+            }
+        } else {
+            log::info!("restore_agent: No session_id provided");
+        }
+
+        log::info!("restore_agent: Falling back to new_agent_thread");
         self.new_agent_thread(agent_type, window, cx);
     }
 
@@ -631,12 +770,18 @@ let panel_type = AgentSettings::get_global(cx).default_view;
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        let thread_view = match &new_view {
+            ActiveView::ExternalAgentThread { thread_view } => Some(thread_view.clone()),
+            _ => None,
+        };
+
         if save_previous {
             self.previous_view = Some(std::mem::replace(&mut self.active_view, new_view));
         } else {
             self.active_view = new_view;
         }
 
+        self.update_thread_view_subscription(thread_view, cx);
         cx.emit(AgentChatContentEvent::ThreadChanged);
         cx.notify();
     }
