@@ -12,6 +12,8 @@ default-run = "zed"
 workspace = true
 
 [features]
+default = ["collab"]
+collab = ["dep:collab_ui"]
 tracy = ["ztracing/tracy"]
 test-support = [
     "gpui/test-support",
@@ -82,7 +84,7 @@ clap.workspace = true
 cli.workspace = true
 client.workspace = true
 codestral.workspace = true
-collab_ui.workspace = true
+collab_ui = { workspace = true, optional = true }
 collections.workspace = true
 command_palette.workspace = true
 component.workspace = true

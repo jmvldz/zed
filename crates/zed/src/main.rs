@@ -11,6 +11,7 @@ use anyhow::{Context as _, Error, Result};
 use clap::Parser;
 use cli::FORCE_CLI_MODE_ENV_VAR_NAME;
 use client::{Client, ProxySettings, UserStore, parse_zed_link};
+#[cfg(feature = "collab")]
 use collab_ui::channel_view::ChannelView;
 use collections::HashMap;
 use crashes::InitCrashHandler;
@@ -51,7 +52,9 @@ use std::{
     time::Instant,
 };
 use theme::{ActiveTheme, GlobalTheme, ThemeRegistry};
-use util::{ResultExt, TryFutureExt, maybe};
+#[cfg(feature = "collab")]
+use util::TryFutureExt;
+use util::{ResultExt, maybe};
 use uuid::Uuid;
 use workspace::{
     AppState, PathList, SerializedWorkspaceLocation, Toast, Workspace, WorkspaceSettings,
@@ -664,6 +667,7 @@ fn main() {
         language_tools::init(cx);
         call::init(app_state.client.clone(), app_state.user_store.clone(), cx);
         notifications::init(app_state.client.clone(), app_state.user_store.clone(), cx);
+        #[cfg(feature = "collab")]
         collab_ui::init(&app_state, cx);
         git_ui::init(cx);
         feedback::init(cx);
@@ -1140,24 +1144,30 @@ fn handle_open_request(request: OpenRequest, app_state: Arc<AppState>, cx: &mut 
                     .await?;
                 }
 
-                let workspace_window =
-                    workspace::get_any_active_workspace(app_state, cx.clone()).await?;
-                let workspace = workspace_window.entity(cx)?;
+                #[cfg(feature = "collab")]
+                {
+                    let workspace_window =
+                        workspace::get_any_active_workspace(app_state, cx.clone()).await?;
+                    let workspace = workspace_window.entity(cx)?;
 
-                let mut promises = Vec::new();
-                for (channel_id, heading) in request.open_channel_notes {
-                    promises.push(cx.update_window(workspace_window.into(), |_, window, cx| {
-                        ChannelView::open(
-                            client::ChannelId(channel_id),
-                            heading,
-                            workspace.clone(),
-                            window,
-                            cx,
-                        )
-                        .log_err()
-                    })?)
+                    let mut promises = Vec::new();
+                    for (channel_id, heading) in request.open_channel_notes {
+                        promises.push(cx.update_window(workspace_window.into(), |_, window, cx| {
+                            ChannelView::open(
+                                client::ChannelId(channel_id),
+                                heading,
+                                workspace.clone(),
+                                window,
+                                cx,
+                            )
+                            .log_err()
+                        })?)
+                    }
+                    future::join_all(promises).await;
                 }
-                future::join_all(promises).await;
+
+                #[cfg(not(feature = "collab"))]
+                let _ = request.open_channel_notes;
                 anyhow::Ok(())
             })
             .await;

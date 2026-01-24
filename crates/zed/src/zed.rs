@@ -652,8 +652,10 @@ fn initialize_panels(
         let outline_panel = OutlinePanel::load(workspace_handle.clone(), cx.clone());
         let terminal_panel = TerminalPanel::load(workspace_handle.clone(), cx.clone());
         let git_panel = GitPanel::load(workspace_handle.clone(), cx.clone());
+        #[cfg(feature = "collab")]
         let channels_panel =
             collab_ui::collab_panel::CollabPanel::load(workspace_handle.clone(), cx.clone());
+        #[cfg(feature = "collab")]
         let notification_panel = collab_ui::notification_panel::NotificationPanel::load(
             workspace_handle.clone(),
             cx.clone(),
@@ -677,6 +679,7 @@ fn initialize_panels(
             }
         }
 
+        #[cfg(feature = "collab")]
         futures::join!(
             add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
@@ -684,6 +687,18 @@ fn initialize_panels(
             add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(channels_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(notification_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(worktrees_panel, workspace_handle.clone(), cx.clone()),
+            initialize_agent_panel(workspace_handle.clone(), prompt_builder, cx.clone()).map(|r| r.log_err()),
+            initialize_agents_panel(workspace_handle, cx.clone()).map(|r| r.log_err())
+        );
+
+        #[cfg(not(feature = "collab"))]
+        futures::join!(
+            add_panel_when_ready(project_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(outline_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(terminal_panel, workspace_handle.clone(), cx.clone()),
+            add_panel_when_ready(git_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(debug_panel, workspace_handle.clone(), cx.clone()),
             add_panel_when_ready(worktrees_panel, workspace_handle.clone(), cx.clone()),
             initialize_agent_panel(workspace_handle.clone(), prompt_builder, cx.clone()).map(|r| r.log_err()),
@@ -1072,24 +1087,6 @@ fn register_actions(
         )
         .register_action(
             |workspace: &mut Workspace,
-             _: &collab_ui::collab_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
-             _: &collab_ui::notification_panel::ToggleFocus,
-             window: &mut Window,
-             cx: &mut Context<Workspace>| {
-                workspace.toggle_panel_focus::<collab_ui::notification_panel::NotificationPanel>(
-                    window, cx,
-                );
-            },
-        )
-        .register_action(
-            |workspace: &mut Workspace,
              _: &terminal_panel::ToggleFocus,
              window: &mut Window,
              cx: &mut Context<Workspace>| {
@@ -1158,6 +1155,28 @@ fn register_actions(
         .register_action(|workspace, _: &CaptureRecentAudio, window, cx| {
             capture_recent_audio(workspace, window, cx);
         });
+
+    #[cfg(feature = "collab")]
+    {
+        workspace.register_action(
+            |workspace: &mut Workspace,
+             _: &collab_ui::collab_panel::ToggleFocus,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                workspace.toggle_panel_focus::<collab_ui::collab_panel::CollabPanel>(window, cx);
+            },
+        );
+        workspace.register_action(
+            |workspace: &mut Workspace,
+             _: &collab_ui::notification_panel::ToggleFocus,
+             window: &mut Window,
+             cx: &mut Context<Workspace>| {
+                workspace.toggle_panel_focus::<collab_ui::notification_panel::NotificationPanel>(
+                    window, cx,
+                );
+            },
+        );
+    }
 
     #[cfg(not(target_os = "windows"))]
     workspace.register_action(install_cli);
@@ -4955,6 +4974,7 @@ mod tests {
             release_channel::init(Version::new(0, 0, 0), cx);
             command_palette::init(cx);
             editor::init(cx);
+            #[cfg(feature = "collab")]
             collab_ui::init(&app_state, cx);
             git_ui::init(cx);
             project_panel::init(cx);
