@@ -12,7 +12,7 @@ default-run = "zed"
 workspace = true
 
 [features]
-default = ["collab"]
+default = []
 collab = ["dep:collab_ui"]
 tracy = ["ztracing/tracy"]
 test-support = [
