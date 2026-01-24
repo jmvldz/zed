@@ -76,7 +76,6 @@ impl ActiveView {
                 Some(thread_store.clone()),
                 prompt_store.clone(),
                 history,
-                false,
                 window,
                 cx,
             )
@@ -1194,7 +1193,6 @@ let panel_type = AgentSettings::get_global(cx).default_view;
                 Some(self.thread_store.clone()),
                 self.prompt_store.clone(),
                 history,
-                !loading,
                 window,
                 cx,
             )

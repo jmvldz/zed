@@ -1,5 +1,5 @@
 use crate::acp::AcpThreadView;
-use crate::{AgentPanel, RemoveHistory, RemoveSelectedThread};
+use crate::{RemoveHistory, RemoveSelectedThread};
 use acp_thread::{AgentSessionInfo, AgentSessionList, AgentSessionListRequest, SessionListUpdate};
 use agent_client_protocol as acp;
 use chrono::{Datelike as _, Local, NaiveDate, TimeDelta, Utc};
