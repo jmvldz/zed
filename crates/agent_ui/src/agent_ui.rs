@@ -5,6 +5,7 @@ mod agent_configuration;
 mod agent_diff;
 mod agent_model_selector;
 mod agent_panel;
+mod agent_registry_ui;
 mod buffer_codegen;
 mod completion_provider;
 mod context;
@@ -22,6 +23,7 @@ mod terminal_inline_assistant;
 mod text_thread_editor;
 mod text_thread_history;
 mod ui;
+mod user_slash_command;
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -32,7 +34,7 @@ use client::Client;
 use command_palette_hooks::CommandPaletteFilter;
 use feature_flags::{AgentV2FeatureFlag, FeatureFlagAppExt as _};
 use fs::Fs;
-use gpui::{Action, App, Entity, SharedString, actions};
+use gpui::{Action, App, Context, Entity, SharedString, Window, actions};
 use language::{
     LanguageRegistry,
     language_settings::{AllLanguageSettings, EditPredictionProvider},
@@ -46,10 +48,12 @@ use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use settings::{LanguageModelSelection, Settings as _, SettingsStore};
 use std::any::TypeId;
+use workspace::Workspace;
 
 use crate::agent_configuration::{ConfigureContextServerModal, ManageProfilesModal};
 pub use crate::agent_chat_view::AgentChatView;
 pub use crate::agent_panel::{AgentPanel, ConcreteAssistantPanelDelegate};
+use crate::agent_registry_ui::AgentRegistryPage;
 pub use crate::inline_assistant::InlineAssistant;
 pub use agent_diff::{AgentDiffPane, AgentDiffToolbar};
 pub use text_thread_editor::{AgentPanelDelegate, TextThreadEditor};
@@ -128,6 +132,8 @@ actions!(
         SendNextQueuedMessage,
         /// Removes the first message from the queue (the next one to be sent).
         RemoveFirstQueuedMessage,
+        /// Edits the first message in the queue (the next one to be sent).
+        EditFirstQueuedMessage,
         /// Clears all messages from the queue.
         ClearMessageQueue,
         /// Opens the permission granularity dropdown for the current tool call.
@@ -272,6 +278,34 @@ pub fn init(
     terminal_inline_assistant::init(fs.clone(), prompt_builder, cx);
     cx.observe_new(move |workspace, window, cx| {
         ConfigureContextServerModal::register(workspace, language_registry.clone(), window, cx)
+    })
+    .detach();
+    cx.observe_new(|workspace: &mut Workspace, _window, _cx| {
+        workspace.register_action(
+            move |workspace: &mut Workspace,
+                  _: &zed_actions::AgentRegistry,
+                  window: &mut Window,
+                  cx: &mut Context<Workspace>| {
+                let existing = workspace
+                    .active_pane()
+                    .read(cx)
+                    .items()
+                    .find_map(|item| item.downcast::<AgentRegistryPage>());
+
+                if let Some(existing) = existing {
+                    workspace.activate_item(&existing, true, true, window, cx);
+                } else {
+                    let registry_page = AgentRegistryPage::new(workspace, window, cx);
+                    workspace.add_item_to_active_pane(
+                        Box::new(registry_page),
+                        None,
+                        true,
+                        window,
+                        cx,
+                    );
+                }
+            },
+        );
     })
     .detach();
     cx.observe_new(ManageProfilesModal::register).detach();
@@ -532,6 +566,7 @@ mod tests {
             enable_feedback: false,
             expand_edit_card: true,
             expand_terminal_card: true,
+            cancel_generation_on_terminal_stop: true,
             use_modifier_to_send: true,
             message_editor_min_lines: 1,
             tool_permissions: Default::default(),
