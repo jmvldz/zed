@@ -339,42 +339,6 @@ impl Item for AgentChatView {
         let content = self.content.downgrade();
         Some(Box::new(move |menu, _window, cx| {
             menu.update(cx, |menu, _cx| {
-                menu.push_item(ContextMenuItem::Header("New Thread".into()));
-                menu.push_item(ContextMenuItem::Entry(
-                    ContextMenuEntry::new("Zed Agent")
-                        .action(crate::NewThread.boxed_clone())
-                        .handler({
-                            let content = content.clone();
-                            move |window, cx| {
-                                if let Some(content) = content.upgrade() {
-                                    content.update(cx, |content, cx| {
-                                        content.external_thread(
-                                            Some(crate::ExternalAgent::NativeAgent),
-                                            None,
-                                            None,
-                                            window,
-                                            cx,
-                                        );
-                                    });
-                                }
-                            }
-                        }),
-                ));
-                menu.push_item(ContextMenuItem::Entry(
-                    ContextMenuEntry::new("Text Thread")
-                        .action(crate::NewTextThread.boxed_clone())
-                        .handler({
-                            let content = content.clone();
-                            move |window, cx| {
-                                if let Some(content) = content.upgrade() {
-                                    content.update(cx, |content, cx| {
-                                        content.new_text_thread(window, cx);
-                                    });
-                                }
-                            }
-                        }),
-                ));
-                menu.push_item(ContextMenuItem::Separator);
                 menu.push_item(ContextMenuItem::Header("External Agents".into()));
                 menu.push_item(ContextMenuItem::Entry(
                     ContextMenuEntry::new("Claude Code")
