@@ -7,7 +7,7 @@ use gpui::{
     Render, Styled, Subscription, Task, WeakEntity, Window,
 };
 use settings::Settings;
-use ui::prelude::*;
+use ui::{prelude::*, ListItem, ListItemSpacing};
 use std::{collections::HashSet, path::PathBuf};
 use util::ResultExt;
 use workspace::{
@@ -384,7 +384,7 @@ impl Render for WorktreesPanel {
             if worktrees.is_empty() {
                 v_flex().px_2().py_1().child("No worktrees found")
             } else {
-                v_flex().gap_1().children(
+                v_flex().children(
                     worktrees
                         .iter()
                         .enumerate()
@@ -395,46 +395,38 @@ impl Render for WorktreesPanel {
                             let chat_count = entry.agent_chat_count;
                             let last_accessed = entry.last_accessed;
 
-                            div()
-                                .id(ElementId::Name(format!("worktree-{}", index).into()))
-                                .px_2()
-                                .py_1()
-                                .w_full()
-                                .cursor_pointer()
-                                .when(is_active, |el| {
-                                    el.bg(cx.theme().colors().ghost_element_selected)
-                                })
-                                .hover(|el| el.bg(cx.theme().colors().ghost_element_hover))
+                            ListItem::new(ElementId::Name(format!("worktree-{}", index).into()))
+                                .spacing(ListItemSpacing::Dense)
+                                .toggle_state(is_active)
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.switch_to_slot(slot_id.clone(), window, cx);
                                 }))
                                 .child(
-                                    h_flex()
-                                        .gap_2()
+                                    v_flex()
                                         .child(
-                                            div()
-                                                .text_sm()
-                                                .font_weight(if is_active {
-                                                    gpui::FontWeight::BOLD
-                                                } else {
-                                                    gpui::FontWeight::NORMAL
-                                                })
-                                                .child(branch_name),
+                                            h_flex()
+                                                .gap_2()
+                                                .child(
+                                                    Label::new(branch_name)
+                                                        .weight(if is_active {
+                                                            gpui::FontWeight::BOLD
+                                                        } else {
+                                                            gpui::FontWeight::NORMAL
+                                                        }),
+                                                )
+                                                .when(chat_count > 0, |el| {
+                                                    el.child(
+                                                        Label::new(format!("({} chats)", chat_count))
+                                                            .size(LabelSize::Small)
+                                                            .color(Color::Muted),
+                                                    )
+                                                }),
                                         )
-                                        .when(chat_count > 0, |el| {
-                                            el.child(
-                                                div()
-                                                    .text_xs()
-                                                    .text_color(cx.theme().colors().text_muted)
-                                                    .child(format!("({} chats)", chat_count)),
-                                            )
-                                        }),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(cx.theme().colors().text_muted)
-                                        .child(format_last_accessed(last_accessed)),
+                                        .child(
+                                            Label::new(format_last_accessed(last_accessed))
+                                                .size(LabelSize::Small)
+                                                .color(Color::Muted),
+                                        ),
                                 )
                         }),
                 )
