@@ -1,5 +1,5 @@
 use gpui::{Pixels, px};
-use settings::RegisterSetting;
+use settings::{ProjectPanelEntrySpacing, RegisterSetting};
 pub use settings::DockSide;
 
 #[derive(Debug, Clone, Copy, PartialEq, RegisterSetting)]
@@ -7,11 +7,13 @@ pub struct WorktreesPanelSettings {
     pub button: bool,
     pub default_width: Pixels,
     pub dock: DockSide,
+    pub entry_spacing: ProjectPanelEntrySpacing,
 }
 
 impl settings::Settings for WorktreesPanelSettings {
     fn from_settings(content: &settings::SettingsContent) -> Self {
         let panel = content.worktrees_panel.as_ref();
+        let project_panel = content.project_panel.as_ref();
         Self {
             button: panel.and_then(|p| p.button).unwrap_or(true),
             default_width: panel
@@ -21,6 +23,9 @@ impl settings::Settings for WorktreesPanelSettings {
             dock: panel
                 .and_then(|p| p.dock.clone())
                 .unwrap_or(DockSide::Left),
+            entry_spacing: project_panel
+                .and_then(|panel| panel.entry_spacing)
+                .unwrap_or(ProjectPanelEntrySpacing::Comfortable),
         }
     }
 }

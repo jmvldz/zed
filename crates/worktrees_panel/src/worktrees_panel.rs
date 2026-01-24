@@ -6,7 +6,7 @@ use gpui::{
     EventEmitter, FocusHandle, Focusable, InteractiveElement, IntoElement, ParentElement, Pixels,
     Render, Styled, Subscription, Task, WeakEntity, Window,
 };
-use settings::Settings;
+use settings::{ProjectPanelEntrySpacing, Settings};
 use ui::{prelude::*, ListItem, ListItemSpacing};
 use std::{collections::HashSet, path::PathBuf};
 use util::ResultExt;
@@ -330,10 +330,20 @@ impl Panel for WorktreesPanel {
 }
 
 impl Render for WorktreesPanel {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let Some(workspace) = self.workspace.upgrade() else {
             return div().into_any_element();
         };
+
+        let list_item_spacing = match WorktreesPanelSettings::get_global(cx).entry_spacing {
+            ProjectPanelEntrySpacing::Comfortable => ListItemSpacing::Dense,
+            ProjectPanelEntrySpacing::Standard => ListItemSpacing::ExtraDense,
+        };
+        let panel_has_focus = self.focus_handle.contains_focused(window, cx);
+        let theme_colors = cx.theme().colors();
+        let item_background_color = theme_colors.panel_background;
+        let item_hover_color = theme_colors.element_hover;
+        let focused_border_color = theme_colors.panel_focused_border;
 
         let repo_name = workspace
             .read(cx)
@@ -394,39 +404,69 @@ impl Render for WorktreesPanel {
                             let branch_name = entry.branch_name.clone();
                             let chat_count = entry.agent_chat_count;
                             let last_accessed = entry.last_accessed;
+                            let border_color = if is_active && panel_has_focus {
+                                focused_border_color
+                            } else {
+                                item_background_color
+                            };
+                            let border_hover_color = if is_active && panel_has_focus {
+                                focused_border_color
+                            } else {
+                                item_hover_color
+                            };
+                            let last_accessed_label = format_last_accessed(last_accessed);
 
-                            ListItem::new(ElementId::Name(format!("worktree-{}", index).into()))
-                                .spacing(ListItemSpacing::Dense)
-                                .toggle_state(is_active)
-                                .on_click(cx.listener(move |this, _, window, cx| {
-                                    this.switch_to_slot(slot_id.clone(), window, cx);
-                                }))
+                            div()
+                                .relative()
+                                .cursor_pointer()
+                                .rounded_none()
+                                .bg(item_background_color)
+                                .border_1()
+                                .border_r_2()
+                                .border_color(border_color)
+                                .hover(|style| {
+                                    style
+                                        .bg(item_hover_color)
+                                        .border_color(border_hover_color)
+                                })
                                 .child(
-                                    v_flex()
-                                        .child(
-                                            h_flex()
-                                                .gap_2()
-                                                .child(
-                                                    Label::new(branch_name)
-                                                        .weight(if is_active {
-                                                            gpui::FontWeight::BOLD
-                                                        } else {
-                                                            gpui::FontWeight::NORMAL
-                                                        }),
+                                    ListItem::new(ElementId::Name(
+                                        format!("worktree-{}", index).into(),
+                                    ))
+                                    .spacing(list_item_spacing)
+                                    .selectable(false)
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        this.switch_to_slot(slot_id.clone(), window, cx);
+                                    }))
+                                    .child(
+                                        h_flex()
+                                            .h_6()
+                                            .gap_2()
+                                            .child(
+                                                Label::new(branch_name)
+                                                    .single_line()
+                                                    .weight(if is_active {
+                                                        gpui::FontWeight::BOLD
+                                                    } else {
+                                                        gpui::FontWeight::NORMAL
+                                                    }),
+                                            )
+                                            .when(chat_count > 0, |el| {
+                                                el.child(
+                                                    Label::new(format!("({} chats)", chat_count))
+                                                        .size(LabelSize::Small)
+                                                        .color(Color::Muted)
+                                                        .single_line(),
                                                 )
-                                                .when(chat_count > 0, |el| {
-                                                    el.child(
-                                                        Label::new(format!("({} chats)", chat_count))
-                                                            .size(LabelSize::Small)
-                                                            .color(Color::Muted),
-                                                    )
-                                                }),
-                                        )
-                                        .child(
-                                            Label::new(format_last_accessed(last_accessed))
-                                                .size(LabelSize::Small)
-                                                .color(Color::Muted),
-                                        ),
+                                            }),
+                                    )
+                                    .end_slot(
+                                        Label::new(last_accessed_label)
+                                            .size(LabelSize::Small)
+                                            .color(Color::Muted)
+                                            .single_line(),
+                                    )
+                                    .overflow_x(),
                                 )
                         }),
                 )
