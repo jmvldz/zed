@@ -6,7 +6,7 @@ version = "0.221.0"
 publish.workspace = true
 license = "GPL-3.0-or-later"
 authors = ["Zed Team <hi@zed.dev>"]
-default-run = "zed"
+default-run = "swarm"
 
 [lints]
 workspace = true
@@ -52,7 +52,7 @@ visual-tests = [
 ]
 
 [[bin]]
-name = "zed"
+name = "swarm"
 path = "src/main.rs"
 
 [[bin]]
