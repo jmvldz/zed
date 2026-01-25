@@ -80,6 +80,9 @@ impl AgentChatView {
         let workspace_handle = workspace.weak_handle();
         cx.spawn_in(window, async move |workspace, cx| {
             let content = AgentChatContent::load(workspace_handle.clone(), prompt_builder, cx.clone()).await?;
+            content.update_in(cx, |content, window, cx| {
+                content.external_thread(None, None, None, window, cx);
+            })?;
             workspace.update_in(cx, |workspace, window, cx| {
                 let view = cx.new(|cx| AgentChatView::new(content, workspace_handle, window, cx));
                 workspace.add_item_to_center(Box::new(view), window, cx);

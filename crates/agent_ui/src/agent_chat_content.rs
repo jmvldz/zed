@@ -458,7 +458,7 @@ let panel_type = AgentSettings::get_global(cx).default_view;
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.new_agent_thread(AgentType::NativeAgent, window, cx);
+        self.external_thread(None, None, None, window, cx);
     }
 
     pub fn new_text_thread(&mut self, window: &mut Window, cx: &mut Context<Self>) {
