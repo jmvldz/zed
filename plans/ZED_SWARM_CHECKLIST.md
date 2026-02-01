@@ -26,3 +26,8 @@ Same for codex in codex-acp.
 
 Bug
 - Restore session works for Codex but not native agent
+
+1/24/26
+- Clean up the worktree UI
+- Show branches in the worktree (?)
+- Show agent history titles in the worktree
